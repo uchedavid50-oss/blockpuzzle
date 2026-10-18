@@ -13,6 +13,7 @@ interface State {
   combo: number;
   over: boolean;
   daily: string | null; // YYYY-MM-DD when playing that day's shared sequence
+  undoLeft: number; // one rewind per game
   trays: number; // trays dealt so far; with the date it fixes the daily sequence
 }
 
@@ -24,11 +25,35 @@ const loadBest = (daily: string | null = null): number => {
   try { return Number(localStorage.getItem(bestKey(daily))) || 0; } catch { return 0; }
 };
 
-function today(): string {
-  const d = new Date();
+function dateStr(d: Date): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
+const today = (): string => dateStr(new Date());
+const yesterday = (): string => {
+  const d = new Date();
+  return dateStr(new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1));
+};
+
+// Consecutive days on which a daily game was started. Device-local; no backend.
+const STREAK_KEY = "blockpuzzle.streak";
+function readStreak(): { last: string; n: number } | null {
+  try {
+    const d = JSON.parse(localStorage.getItem(STREAK_KEY) ?? "null") as { last?: string; n?: number } | null;
+    return d && typeof d.last === "string" && typeof d.n === "number" ? { last: d.last, n: d.n } : null;
+  } catch { return null; }
+}
+function streakNow(): number {
+  const s = readStreak();
+  return s && (s.last === today() || s.last === yesterday()) ? s.n : 0;
+}
+function bumpStreak(): void {
+  const s = readStreak();
+  if (s?.last === today()) return;
+  const n = s?.last === yesterday() ? s.n + 1 : 1;
+  try { localStorage.setItem(STREAK_KEY, JSON.stringify({ last: today(), n })); } catch { /* ignore */ }
+}
+const playedDailyToday = (): boolean => readStreak()?.last === today();
 
 /** Seeded generator (mulberry32 over an FNV-1a hash), so a date gives everyone the same trays. */
 function seeded(seed: string): () => number {
@@ -61,7 +86,7 @@ function newState(daily: string | null = null): State {
   pop = blankPop();
   startBest = loadBest(daily);
   const grid = emptyGrid();
-  return { grid, tray: makeTray(grid, daily, 0), score: 0, best: loadBest(daily), combo: 0, over: false, daily, trays: 1 };
+  return { grid, tray: makeTray(grid, daily, 0), score: 0, best: loadBest(daily), combo: 0, over: false, daily, trays: 1, undoLeft: 1 };
 }
 
 // ---- Saving a game in progress ------------------------------------------------
@@ -77,6 +102,7 @@ function save(): void {
       c: state.combo,
       d: state.daily,
       n: state.trays,
+      u: state.undoLeft,
       k: colorGrid.flat().map((v) => (v < 0 ? "-" : String(v))).join(""),
     }));
   } catch { /* ignore */ }
@@ -86,7 +112,7 @@ function load(): State | null {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
-    const d = JSON.parse(raw) as { g: string; t: number[]; s: number; c: number; k?: string; d?: string | null; n?: number };
+    const d = JSON.parse(raw) as { g: string; t: number[]; s: number; c: number; k?: string; d?: string | null; n?: number; u?: number };
     if (typeof d?.g !== "string" || d.g.length !== SIZE * SIZE || !Array.isArray(d.t)) return null;
     const grid = Array.from({ length: SIZE }, (_, r) =>
       Array.from({ length: SIZE }, (_, c) => d.g[r * SIZE + c] === "1"));
@@ -103,7 +129,7 @@ function load(): State | null {
     startBest = loadBest(daily);
     return {
       grid, tray, score: Number(d.s) || 0, best: loadBest(daily), combo: Number(d.c) || 0, over: false,
-      daily, trays: Number(d.n) || 1,
+      daily, trays: Number(d.n) || 1, undoLeft: d.u === 0 ? 0 : 1,
     };
   } catch {
     return null;
@@ -138,11 +164,11 @@ function layout(): void {
   canvas.height = H * dpr;
   canvas.style.width = `${W}px`;
   canvas.style.height = `${H}px`;
-  const top = 96;
+  const top = 108;
   cell = Math.floor(Math.min(W - 44, (H - top) * 0.6) / SIZE);
   boardX = Math.floor((W - cell * SIZE) / 2);
   boardY = top;
-  trayCell = Math.floor(cell * 0.6);
+  trayCell = Math.floor(Math.min(cell * 0.6, (W - 48) / 15));
   trayY = boardY + cell * SIZE + (H - boardY - cell * SIZE) / 2 - trayCell * 1.5;
 }
 
@@ -153,9 +179,42 @@ function slotRect(i: number): { x: number; y: number; size: number } {
   return { x: gap + i * (size + gap), y: trayY - trayCell, size };
 }
 
-const MUTE_R = 14;
-const muteCenter = (): [number, number] => [W - 26, 70];
+const CHIP = { x: 22, y: 64, w: 108, h: 26 };
+const undoRect = (): { x: number; y: number; w: number; h: number } => ({ x: W - 124, y: 64, w: 76, h: 26 });
+const inRect = (r: { x: number; y: number; w: number; h: number }, x: number, y: number): boolean =>
+  x >= r.x - 4 && x <= r.x + r.w + 4 && y >= r.y - 6 && y <= r.y + r.h + 6;
 
+const MUTE_R = 14;
+const muteCenter = (): [number, number] => [W - 26, 77];
+
+interface Snapshot { grid: Grid; tray: (Shape | null)[]; score: number; combo: number; trays: number; colors: number[][] }
+let snap: Snapshot | null = null;
+
+const canUndo = (): boolean => !!snap && state.undoLeft > 0 && !state.over && !drag;
+
+function undo(): void {
+  if (!snap || !canUndo()) return;
+  state.grid = snap.grid;
+  state.tray = snap.tray;
+  state.score = snap.score;
+  state.combo = snap.combo;
+  state.trays = snap.trays;
+  state.undoLeft--;
+  colorGrid = snap.colors;
+  pop = blankPop();
+  clears = []; particles = []; floaters = []; shake = 0;
+  shownScore = state.score;
+  snap = null;
+  sfx.place();
+  save();
+}
+
+function startDaily(target: string | null): void {
+  if (state.score > 0 && !state.over && !confirm("Start a new game? Your current game will be lost.")) return;
+  reset(target);
+}
+
+let moves = 0; // placements this session, to time the install nudge
 let overPress: "share" | "again" | "mode" | null = null;
 let sharedAt = -10; // clock time of the last "copied" confirmation
 
@@ -188,6 +247,7 @@ async function shareScore(): Promise<void> {
 
 function reset(daily: string | null = null): void {
   state = newState(daily);
+  snap = null;
   shownScore = 0;
   clears = []; particles = []; floaters = []; returning = [];
   overT = 0;
@@ -226,6 +286,8 @@ canvas.addEventListener("pointerdown", (e) => {
     if (overT >= 0.6) overPress = overHit(e.clientX, e.clientY);
     return;
   }
+  if (inRect(CHIP, e.clientX, e.clientY)) { startDaily(state.daily ? null : today()); return; }
+  if (canUndo() && inRect(undoRect(), e.clientX, e.clientY)) { undo(); return; }
   if (drag) return;
   const slot = slotAt(e.clientX, e.clientY);
   const shape = slot >= 0 ? state.tray[slot] : null;
@@ -255,6 +317,13 @@ canvas.addEventListener("pointerup", (e) => {
   if (t?.ok) {
     const res = place(state.grid, drag.shape, t.row, t.col, state.combo);
     const lines = res.rowsCleared.length + res.colsCleared.length;
+    snap = {
+      grid: state.grid, tray: [...state.tray], score: state.score, combo: state.combo,
+      trays: state.trays, colors: colorGrid.map((r) => r.slice()),
+    };
+    if (state.daily === today()) bumpStreak();
+    moves++;
+    maybeShowInstall();
 
     for (const [dr, dc] of drag.shape) {
       colorGrid[t.row + dr]![t.col + dc] = color;
@@ -414,12 +483,12 @@ function drawHud(): void {
   label(state.daily ? "DAILY" : "SCORE", 22, 20, "left");
   label(state.daily ? "BEST TODAY" : "BEST", W - 22, 20, "right");
   ctx.fillStyle = COLORS.text;
-  ctx.font = `700 30px ${FONT}`;
+  ctx.font = `700 28px ${FONT}`;
   ctx.textAlign = "left";
-  ctx.fillText(String(Math.round(shownScore)), 22, 46);
+  ctx.fillText(String(Math.round(shownScore)), 22, 43);
   ctx.textAlign = "right";
   ctx.fillStyle = state.score >= state.best && state.score > 0 ? COLORS.combo : COLORS.text;
-  ctx.fillText(String(state.best), W - 22, 46);
+  ctx.fillText(String(state.best), W - 22, 43);
 
   if (state.combo >= 2) {
     const pulse = 1 + (reduceMotion ? 0 : 0.06 * Math.sin(clock * 9));
@@ -442,6 +511,35 @@ function drawHud(): void {
     ctx.fillText(label, 0, 1);
     ctx.restore();
   }
+}
+
+function pill(r: { x: number; y: number; w: number; h: number }, text: string, hot: boolean): void {
+  ctx.fillStyle = hot ? "rgba(255,197,85,0.14)" : "rgba(255,255,255,0.06)";
+  ctx.beginPath();
+  ctx.roundRect(r.x, r.y, r.w, r.h, r.h / 2);
+  ctx.fill();
+  ctx.strokeStyle = hot ? "rgba(255,197,85,0.5)" : "rgba(255,255,255,0.12)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = hot ? COLORS.combo : COLORS.text;
+  ctx.font = `600 13px ${FONT}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, r.x + r.w / 2, r.y + r.h / 2 + 1);
+}
+
+function drawControls(): void {
+  const played = playedDailyToday();
+  pill(CHIP, state.daily ? "Random game" : played ? "Daily \u2713" : "Play daily", !state.daily && !played);
+  const streak = streakNow();
+  if (streak > 0) {
+    ctx.fillStyle = COLORS.combo;
+    ctx.font = `700 14px ${FONT}`;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`\u{1F525} ${streak}`, CHIP.x + CHIP.w + 10, CHIP.y + CHIP.h / 2 + 1);
+  }
+  if (canUndo()) pill(undoRect(), "\u21B6 Undo", false);
 }
 
 function drawBoard(): void {
@@ -508,6 +606,7 @@ function render(dt: number): void {
 
   drawHud();
   drawMute();
+  drawControls();
   drawBoard();
 
   // Cleared cells: swell, glow white, then shrink away.
@@ -704,3 +803,63 @@ requestAnimationFrame(frame);
 // Production only: in dev a service worker happily serves yesterday's bundle back to you.
 if (import.meta.env.PROD && "serviceWorker" in navigator)
   window.addEventListener("load", () => void navigator.serviceWorker.register("/sw.js").catch(() => {}));
+
+// ---- Install nudge ---------------------------------------------------------------
+// Chrome/Android hand us an install event; iOS Safari has none, so it gets instructions.
+
+interface InstallEvent extends Event { prompt(): Promise<void> }
+const INSTALL_KEY = "blockpuzzle.installDismissed";
+let installEvent: InstallEvent | null = null;
+let installShown = false;
+
+const standalone =
+  window.matchMedia?.("(display-mode: standalone)").matches ||
+  (navigator as unknown as { standalone?: boolean }).standalone === true;
+const iosSafari = /iphone|ipad|ipod/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent);
+
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  installEvent = e as InstallEvent;
+});
+
+function dismissedInstall(): boolean {
+  try { return localStorage.getItem(INSTALL_KEY) === "1"; } catch { return false; }
+}
+
+function maybeShowInstall(): void {
+  if (installShown || standalone || moves < 6 || dismissedInstall()) return;
+  if (!installEvent && !iosSafari) return;
+  installShown = true;
+
+  const bar = document.createElement("div");
+  bar.style.cssText =
+    "position:fixed;left:12px;right:12px;bottom:max(12px,env(safe-area-inset-bottom));z-index:10;" +
+    "display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:16px;" +
+    "background:rgba(28,33,50,0.96);border:1px solid rgba(255,255,255,0.12);color:#eef1f8;" +
+    "font:500 14px system-ui,-apple-system,sans-serif;box-shadow:0 12px 40px rgba(0,0,0,0.5)";
+  const msg = document.createElement("span");
+  msg.style.flex = "1";
+  msg.textContent = installEvent
+    ? "Install Block Puzzle for quick, offline play."
+    : "Add to Home Screen: tap Share, then \u201cAdd to Home Screen\u201d.";
+  bar.append(msg);
+
+  const close = (remember: boolean): void => {
+    if (remember) { try { localStorage.setItem(INSTALL_KEY, "1"); } catch { /* ignore */ } }
+    bar.remove();
+  };
+  const btn = (text: string, primary: boolean, on: () => void): HTMLButtonElement => {
+    const b = document.createElement("button");
+    b.textContent = text;
+    b.style.cssText =
+      "border:0;border-radius:999px;padding:8px 14px;font:600 13px system-ui,sans-serif;cursor:pointer;" +
+      (primary ? "background:#4da3ff;color:#fff" : "background:transparent;color:#9aa3b8");
+    b.onclick = on;
+    return b;
+  };
+  if (installEvent) {
+    bar.append(btn("Install", true, () => { void installEvent?.prompt(); close(true); }));
+  }
+  bar.append(btn(installEvent ? "Not now" : "Got it", false, () => close(true)));
+  document.body.append(bar);
+}
