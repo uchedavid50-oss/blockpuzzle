@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Block Puzzle</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #14161c; overflow: hidden; }
+  canvas { display: block; touch-action: none; user-select: none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+(() => {
+  // board.ts
+  var SIZE = 8;
+  function emptyGrid() {
+    return Array.from({ length: SIZE }, () => Array(SIZE).fill(false));
+  }
+  function inBounds(r, c) {
+    return r >= 0 && r < SIZE && c >= 0 && c < SIZE;
+  }
+  function canPlace(grid, shape, row, col) {
+    return shape.every(([dr, dc]) => {
+      const r = row + dr;
+      const c = col + dc;
+      return inBounds(r, c) && !grid[r][c];
+    });
+  }
+  function place(grid, shape, row, col) {
+    if (!canPlace(grid, shape, row, col)) throw new Error("illegal placement");
+    const next = grid.map((r) => r.slice());
+    for (const [dr, dc] of shape) next[row + dr][col + dc] = true;
+    const rowsCleared = [];
+    const colsCleared = [];
+    for (let i = 0; i < SIZE; i++) {
+      if (next[i].every(Boolean)) rowsCleared.push(i);
+      if (next.every((r) => r[i])) colsCleared.push(i);
+    }
+    for (const r of rowsCleared) for (let c = 0; c < SIZE; c++) next[r][c] = false;
+    for (const c of colsCleared) for (let r = 0; r < SIZE; r++) next[r][c] = false;
+    const lines = rowsCleared.length + colsCleared.length;
+    const points = shape.length + (lines > 0 ? SIZE * lines * lines : 0);
+    return { grid: next, rowsCleared, colsCleared, points };
+  }
+  function canPlaceAnywhere(grid, shape) {
+    for (let r = 0; r < SIZE; r++)
+      for (let c = 0; c < SIZE; c++) if (canPlace(grid, shape, r, c)) return true;
+    return false;
+  }
+  function hasMoves(grid, shapes) {
+    return shapes.some((s) => canPlaceAnywhere(grid, s));
+  }
+  function shapeSize(shape) {
+    let rows = 0;
+    let cols = 0;
+    for (const [r, c] of shape) {
+      rows = Math.max(rows, r + 1);
+      cols = Math.max(cols, c + 1);
+    }
+    return { rows, cols };
+  }
+
+  // pieces.ts
+  var rect = (h, w) => Array.from({ length: h * w }, (_, i) => [Math.floor(i / w), i % w]);
+  var SHAPES = [
+    rect(1, 1),
+    rect(1, 2),
+    rect(2, 1),
+    rect(1, 3),
+    rect(3, 1),
+    rect(1, 4),
+    rect(4, 1),
+    rect(1, 5),
+    rect(5, 1),
+    rect(2, 2),
+    rect(3, 3),
+    rect(2, 3),
+    rect(3, 2),
+    // L corners (3 cells)
+    [[0, 0], [1, 0], [1, 1]],
+    [[0, 0], [0, 1], [1, 0]],
+    [[0, 0], [0, 1], [1, 1]],
+    [[0, 1], [1, 0], [1, 1]],
+    // Big L corners (5 cells)
+    [[0, 0], [1, 0], [2, 0], [2, 1], [2, 2]],
+    [[0, 0], [0, 1], [0, 2], [1, 0], [2, 0]],
+    [[0, 0], [0, 1], [0, 2], [1, 2], [2, 2]],
+    [[0, 2], [1, 2], [2, 0], [2, 1], [2, 2]],
+    // Tall/wide L (4 cells)
+    [[0, 0], [1, 0], [2, 0], [2, 1]],
+    [[0, 1], [1, 1], [2, 0], [2, 1]],
+    [[0, 0], [0, 1], [1, 0], [2, 0]],
+    [[0, 0], [0, 1], [1, 1], [2, 1]],
+    [[0, 0], [1, 0], [1, 1], [1, 2]],
+    [[0, 0], [0, 1], [0, 2], [1, 0]],
+    [[0, 0], [0, 1], [0, 2], [1, 2]],
+    [[0, 2], [1, 0], [1, 1], [1, 2]],
+    // T shapes
+    [[0, 0], [0, 1], [0, 2], [1, 1]],
+    [[0, 1], [1, 0], [1, 1], [1, 2]],
+    [[0, 0], [1, 0], [2, 0], [1, 1]],
+    [[0, 1], [1, 0], [1, 1], [2, 1]],
+    // S/Z shapes
+    [[0, 1], [0, 2], [1, 0], [1, 1]],
+    [[0, 0], [0, 1], [1, 1], [1, 2]],
+    [[0, 0], [1, 0], [1, 1], [2, 1]],
+    [[0, 1], [1, 0], [1, 1], [2, 0]]
+  ];
+  function drawTray(rng = Math.random) {
+    return Array.from({ length: 3 }, () => SHAPES[Math.floor(rng() * SHAPES.length)]);
+  }
+
+  // main.ts
+  var canvas = document.getElementById("game");
+  var ctx = canvas.getContext("2d");
+  var BEST_KEY = "blockpuzzle.best";
+  var loadBest = () => {
+    try {
+      return Number(localStorage.getItem(BEST_KEY)) || 0;
+    } catch {
+      return 0;
+    }
+  };
+  var state = newState();
+  function newState() {
+    return { grid: emptyGrid(), tray: drawTray(), score: 0, best: loadBest(), over: false };
+  }
+  var dpr = 1;
+  var W = 0;
+  var H = 0;
+  var cell = 0;
+  var boardX = 0;
+  var boardY = 0;
+  var trayY = 0;
+  var trayCell = 0;
+  function layout() {
+    dpr = window.devicePixelRatio || 1;
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = `${W}px`;
+    canvas.style.height = `${H}px`;
+    const top = 60;
+    cell = Math.floor(Math.min(W - 24, (H - top) * 0.62) / SIZE);
+    boardX = Math.floor((W - cell * SIZE) / 2);
+    boardY = top;
+    trayCell = Math.floor(cell * 0.6);
+    trayY = boardY + cell * SIZE + (H - boardY - cell * SIZE) / 2 - trayCell * 1.5;
+  }
+  function slotRect(i) {
+    const size = trayCell * 5;
+    const gap = (W - size * 3) / 4;
+    return { x: gap + i * (size + gap), y: trayY - trayCell, size };
+  }
+  var drag = null;
+  function dragTarget() {
+    if (!drag) return null;
+    const { rows, cols } = shapeSize(drag.shape);
+    const lift = drag.touch ? cell * 1.5 : 0;
+    const col = Math.round((drag.px - boardX) / cell - cols / 2);
+    const row = Math.round((drag.py - lift - boardY) / cell - rows / 2);
+    return { row, col, ok: canPlace(state.grid, drag.shape, row, col) };
+  }
+  function slotAt(x, y) {
+    for (let i = 0; i < 3; i++) {
+      const r = slotRect(i);
+      if (x >= r.x && x <= r.x + r.size && y >= r.y && y <= r.y + r.size) return i;
+    }
+    return -1;
+  }
+  canvas.addEventListener("pointerdown", (e) => {
+    if (state.over) {
+      state = newState();
+      return;
+    }
+    if (drag) return;
+    const slot = slotAt(e.clientX, e.clientY);
+    const shape = slot >= 0 ? state.tray[slot] : null;
+    if (!shape) return;
+    canvas.setPointerCapture(e.pointerId);
+    drag = { slot, shape, px: e.clientX, py: e.clientY, pointerId: e.pointerId, touch: e.pointerType !== "mouse" };
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (drag && e.pointerId === drag.pointerId) {
+      drag.px = e.clientX;
+      drag.py = e.clientY;
+    }
+  });
+  canvas.addEventListener("pointerup", (e) => {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    drag.px = e.clientX;
+    drag.py = e.clientY;
+    const t = dragTarget();
+    if (t?.ok) {
+      const res = place(state.grid, drag.shape, t.row, t.col);
+      state.grid = res.grid;
+      state.score += res.points;
+      state.tray[drag.slot] = null;
+      if (state.tray.every((s) => s === null)) state.tray = drawTray();
+      if (state.score > state.best) {
+        state.best = state.score;
+        try {
+          localStorage.setItem(BEST_KEY, String(state.best));
+        } catch {
+        }
+      }
+      const remaining = state.tray.filter((s) => s !== null);
+      if (!hasMoves(state.grid, remaining)) state.over = true;
+    }
+    drag = null;
+  });
+  canvas.addEventListener("pointercancel", () => {
+    drag = null;
+  });
+  var COLORS = { bg: "#14161c", empty: "#232733", filled: "#4da3ff", ok: "rgba(120,220,140,0.55)", bad: "rgba(240,90,90,0.45)", text: "#e8ecf4" };
+  function box(x, y, s, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.roundRect(x + 1, y + 1, s - 2, s - 2, s * 0.15);
+    ctx.fill();
+  }
+  function drawShape(shape, x, y, s, color) {
+    for (const [r, c] of shape) box(x + c * s, y + r * s, s, color);
+  }
+  function render() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = COLORS.bg;
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = COLORS.text;
+    ctx.textBaseline = "middle";
+    ctx.font = "600 22px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(`Score ${state.score}`, 16, 30);
+    ctx.textAlign = "right";
+    ctx.fillText(`Best ${state.best}`, W - 16, 30);
+    for (let r = 0; r < SIZE; r++)
+      for (let c = 0; c < SIZE; c++)
+        box(boardX + c * cell, boardY + r * cell, cell, state.grid[r][c] ? COLORS.filled : COLORS.empty);
+    const t = dragTarget();
+    if (drag && t) {
+      const color = t.ok ? COLORS.ok : COLORS.bad;
+      if (t.ok) drawShape(drag.shape, boardX + t.col * cell, boardY + t.row * cell, cell, color);
+    }
+    state.tray.forEach((shape, i) => {
+      if (!shape || drag?.slot === i) return;
+      const slot = slotRect(i);
+      const { rows, cols } = shapeSize(shape);
+      drawShape(shape, slot.x + (slot.size - cols * trayCell) / 2, slot.y + (slot.size - rows * trayCell) / 2, trayCell, COLORS.filled);
+    });
+    if (drag) {
+      const { rows, cols } = shapeSize(drag.shape);
+      const lift = drag.touch ? cell * 1.5 : 0;
+      drawShape(drag.shape, drag.px - cols * cell / 2, drag.py - lift - rows * cell / 2, cell, COLORS.filled);
+    }
+    if (state.over) {
+      ctx.fillStyle = "rgba(10,12,16,0.8)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = COLORS.text;
+      ctx.textAlign = "center";
+      ctx.font = "700 36px system-ui, sans-serif";
+      ctx.fillText("No moves left", W / 2, H / 2 - 20);
+      ctx.font = "500 20px system-ui, sans-serif";
+      ctx.fillText(`Score ${state.score} \u2014 tap to play again`, W / 2, H / 2 + 20);
+    }
+  }
+  function frame() {
+    render();
+    requestAnimationFrame(frame);
+  }
+  window.addEventListener("resize", layout);
+  layout();
+  frame();
+})();
+
+</script>
+</body>
+</html>
