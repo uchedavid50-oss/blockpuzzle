@@ -157,9 +157,13 @@ const HINT_KEY = "blockpuzzle.hintSeen";
 
 // ---- Transient effects (purely visual; never affect game logic) ---------------
 
-interface Clear { cells: [number, number, number][]; t: number } // [row, col, colour]
+interface ClearCell { r: number; c: number; ci: number; delay: number; fired: boolean }
+interface Clear { cells: ClearCell[]; t: number; lines: number }
+interface Ring { x: number; y: number; t: number; max: number; color: string; w: number }
+let rings: Ring[] = [];
+let scorePulse = 0;
 let clears: Clear[] = [];
-interface Particle { x: number; y: number; vx: number; vy: number; life: number; size: number; color: string }
+interface Particle { x: number; y: number; vx: number; vy: number; life: number; size: number; color: string; g?: number; spark?: boolean }
 let particles: Particle[] = [];
 interface Floater { x: number; y: number; text: string; sub: string; t: number }
 let floaters: Floater[] = [];
@@ -222,7 +226,7 @@ function undo(): void {
   state.undoLeft--;
   colorGrid = snap.colors;
   pop = blankPop();
-  clears = []; particles = []; floaters = []; shake = 0;
+  clears = []; particles = []; floaters = []; rings = []; shake = 0;
   shownScore = state.score;
   snap = null;
   sfx.place();
@@ -275,7 +279,7 @@ function reset(daily: string | null = null): void {
   state = newState(daily);
   snap = null;
   shownScore = 0;
-  clears = []; particles = []; floaters = []; returning = [];
+  clears = []; particles = []; floaters = []; returning = []; rings = [];
   overT = 0;
   save();
 }
@@ -364,6 +368,26 @@ canvas.addEventListener("pointerup", (e) => {
       colorGrid[t.row + dr]![t.col + dc] = color;
       pop[t.row + dr]![t.col + dc] = 1;
     }
+    {
+      // Landing: a shockwave ring and a puff of dust from every placed block.
+      const { rows, cols } = shapeSize(drag.shape);
+      rings.push({
+        x: boardX + (t.col + cols / 2) * cell, y: boardY + (t.row + rows / 2) * cell, t: 0,
+        max: cell * (1.3 + Math.max(rows, cols) * 0.35), color: PALETTE[color]!, w: 3,
+      });
+      if (!reduceMotion)
+        for (const [dr, dc] of drag.shape)
+          for (let i = 0; i < 2; i++) {
+            const a = Math.random() * Math.PI * 2;
+            const v = 30 + Math.random() * 70;
+            particles.push({
+              x: boardX + (t.col + dc + 0.5) * cell, y: boardY + (t.row + dr + 0.5) * cell,
+              vx: Math.cos(a) * v, vy: Math.sin(a) * v - 20, life: 0.7, size: 1.5 + Math.random() * 2,
+              color: PALETTE[color]!, g: 160,
+            });
+          }
+      scorePulse = 1;
+    }
 
     if (lines > 0) {
       // Record the cleared cells (and their colours) before the grid forgets them.
@@ -371,22 +395,24 @@ canvas.addEventListener("pointerup", (e) => {
       for (const r of res.rowsCleared) for (let c = 0; c < SIZE; c++) cells.add(`${r},${c}`);
       for (const c of res.colsCleared) for (let r = 0; r < SIZE; r++) cells.add(`${r},${c}`);
       const list = [...cells].map((k) => k.split(",").map(Number) as [number, number]);
-      clears.push({ cells: list.map(([r, c]) => [r, c, colorGrid[r]![c]!]), t: 0 });
+      const { rows: pr, cols: pc } = shapeSize(drag.shape);
+      const lr = t.row + (pr - 1) / 2;
+      const lc = t.col + (pc - 1) / 2;
+      clears.push({
+        lines, t: 0,
+        cells: list.map(([r, c]) => ({
+          r, c, ci: colorGrid[r]![c]!, fired: false,
+          // The wave travels outward from where the piece landed.
+          delay: reduceMotion ? 0 : Math.min(0.4, Math.hypot(r - lr, c - lc) * 0.05),
+        })),
+      });
       let sx = 0, sy = 0;
       for (const [r, c] of list) {
-        const x = boardX + (c + 0.5) * cell;
-        const y = boardY + (r + 0.5) * cell;
-        sx += x; sy += y;
-        if (!reduceMotion) {
-          const col = PALETTE[colorGrid[r]![c]!] ?? PALETTE[0]!;
-          for (let i = 0; i < 3; i++) {
-            const a = Math.random() * Math.PI * 2;
-            const v = 60 + Math.random() * 160 * (1 + lines * 0.2);
-            particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 90, life: 1, size: 2 + Math.random() * 3.5, color: col });
-          }
-        }
+        sx += boardX + (c + 0.5) * cell;
+        sy += boardY + (r + 0.5) * cell;
         colorGrid[r]![c] = -1;
       }
+      rings.push({ x: sx / list.length, y: sy / list.length, t: 0, max: cell * (2.2 + lines * 0.5), color: lines >= 2 ? COLORS.combo : "#ffffff", w: 2.5 + lines * 0.5 });
       const labels = ["", "", "Double!", "Triple!", "Quad!", "Incredible!"];
       floaters.push({
         x: sx / list.length, y: sy / list.length,
@@ -539,7 +565,12 @@ function drawHud(): void {
   ctx.fillStyle = COLORS.text;
   ctx.font = `700 28px ${FONT}`;
   ctx.textAlign = "left";
-  ctx.fillText(String(Math.round(shownScore)), 22, 43);
+  ctx.save();
+  ctx.translate(22, 43);
+  const bump = reduceMotion ? 1 : 1 + 0.2 * scorePulse * scorePulse;
+  ctx.scale(bump, bump);
+  ctx.fillText(String(Math.round(shownScore)), 0, 0);
+  ctx.restore();
   ctx.textAlign = "right";
   ctx.fillStyle = state.score >= state.best && state.score > 0 ? COLORS.combo : COLORS.text;
   ctx.fillText(String(state.best), W - 22, 43);
@@ -651,10 +682,32 @@ function drawBoard(): void {
       const y = boardY + r * cell;
       const ci = colorGrid[r]![c]!;
       if (!state.grid[r]![c]) { emptyCell(x, y, cell); continue; }
-      const sc = 1 + 0.13 * Math.sin(pop[r]![c]! * Math.PI);
+      // Landing spring: drops in oversized, squashes under, settles. Then a quick white flash.
+      const pp = 1 - pop[r]![c]!;
+      const sc = reduceMotion ? 1 : 1 + 0.26 * Math.exp(-4.4 * pp) * Math.cos(pp * Math.PI * 2.4);
       const s = cell * sc;
       block(x + (cell - s) / 2, y + (cell - s) / 2, s, PALETTE[ci < 0 ? 0 : ci]!);
+      if (pop[r]![c]! > 0.55 && !reduceMotion) {
+        ctx.fillStyle = `rgba(255,255,255,${(pop[r]![c]! - 0.55) * 1.3})`;
+        ctx.beginPath();
+        ctx.roundRect(x + (cell - s) / 2 + 1, y + (cell - s) / 2 + 1, s - 2, s - 2, s * 0.22);
+        ctx.fill();
+      }
     }
+}
+
+/** Sparks and dots flying out of a cleared cell; bigger clears throw more, faster. */
+function burst(x: number, y: number, color: string, lines: number): void {
+  if (reduceMotion) return;
+  const n = 5 + lines * 2;
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const v = 110 + Math.random() * 240 * (1 + lines * 0.22);
+    particles.push({
+      x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 100, life: 1,
+      size: 2 + Math.random() * 3, color: i % 3 === 0 ? "#ffffff" : color, spark: i % 2 === 0,
+    });
+  }
 }
 
 let dtLast = 0;
@@ -665,10 +718,21 @@ function render(dt: number): void {
   shownScore += (state.score - shownScore) * Math.min(1, dt * 8);
   if (Math.abs(state.score - shownScore) < 0.5) shownScore = state.score;
 
-  clears = clears.filter((c) => (c.t += dt * 2.6) < 1);
+  for (const cl of clears) {
+    cl.t += dt * 2;
+    for (const cc of cl.cells)
+      if (!cc.fired && cl.t >= cc.delay) {
+        cc.fired = true;
+        burst(boardX + (cc.c + 0.5) * cell, boardY + (cc.r + 0.5) * cell, PALETTE[cc.ci < 0 ? 0 : cc.ci]!, cl.lines);
+      }
+  }
+  clears = clears.filter((cl) => cl.t < 1);
+  for (const r of rings) r.t += dt * 2.4;
+  rings = rings.filter((r) => r.t < 1);
+  scorePulse = Math.max(0, scorePulse - dt * 4);
   shake = Math.max(0, shake - dt * 3.5);
-  for (const row of pop) for (let c = 0; c < SIZE; c++) row[c] = Math.max(0, row[c]! - dt * 5);
-  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 700 * dt; p.life -= dt * 1.5; }
+  for (const row of pop) for (let c = 0; c < SIZE; c++) row[c] = Math.max(0, row[c]! - dt * 3);
+  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g ?? 700) * dt; p.life -= dt * 1.5; }
   particles = particles.filter((p) => p.life > 0);
   for (const f of floaters) f.t += dt * 1.1;
   floaters = floaters.filter((f) => f.t < 1);
@@ -694,20 +758,22 @@ function render(dt: number): void {
   drawControls();
   drawBoard();
 
-  // Cleared cells: swell, glow white, then shrink away.
+  // Cleared cells: wait for the wave to arrive, then swell, flash white and shrink away.
   for (const cl of clears) {
-    const k = reduceMotion ? 0 : cl.t;
-    const swell = 1 + 0.18 * Math.sin(Math.min(1, k * 2.2) * Math.PI);
-    const size = cell * swell * (1 - Math.pow(k, 2));
-    const off = (cell - size) / 2;
-    ctx.globalAlpha = 1 - Math.pow(cl.t, 1.5);
-    for (const [r, c, ci] of cl.cells) {
-      const hex = PALETTE[ci < 0 ? 0 : ci]!;
-      block(boardX + c * cell + off, boardY + r * cell + off, size, hex);
-      ctx.fillStyle = `rgba(255,255,255,${0.7 * (1 - k)})`;
-      ctx.beginPath();
-      ctx.roundRect(boardX + c * cell + off, boardY + r * cell + off, size, size, size * 0.22);
-      ctx.fill();
+    for (const cc of cl.cells) {
+      const hex = PALETTE[cc.ci < 0 ? 0 : cc.ci]!;
+      const k = reduceMotion ? 0 : Math.min(1, Math.max(0, (cl.t - cc.delay) / 0.6));
+      const swell = 1 + 0.22 * Math.sin(Math.min(1, k * 2.2) * Math.PI);
+      const size = Math.max(0.5, cell * swell * (1 - Math.pow(k, 2)));
+      const off = (cell - size) / 2;
+      ctx.globalAlpha = reduceMotion ? 1 - cl.t : 1 - Math.pow(k, 1.5);
+      block(boardX + cc.c * cell + off, boardY + cc.r * cell + off, size, hex);
+      if (k > 0) {
+        ctx.fillStyle = `rgba(255,255,255,${0.75 * (1 - k)})`;
+        ctx.beginPath();
+        ctx.roundRect(boardX + cc.c * cell + off, boardY + cc.r * cell + off, size, size, size * 0.22);
+        ctx.fill();
+      }
     }
     ctx.globalAlpha = 1;
   }
@@ -777,12 +843,33 @@ function render(dt: number): void {
     ctx.restore();
   }
 
+  if (!reduceMotion)
+    for (const r of rings) {
+      const e = 1 - Math.pow(1 - r.t, 3);
+      ctx.globalAlpha = (1 - r.t) * 0.6;
+      ctx.strokeStyle = r.color;
+      ctx.lineWidth = r.w * (1 - r.t) + 0.5;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, r.max * e, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
   for (const p of particles) {
     ctx.globalAlpha = Math.max(0, p.life);
-    ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size * (0.4 + 0.6 * p.life), 0, Math.PI * 2);
-    ctx.fill();
+    if (p.spark) {
+      ctx.strokeStyle = p.color;
+      ctx.lineWidth = Math.max(1, p.size * 0.7);
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(p.x - p.vx * 0.035, p.y - p.vy * 0.035);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * (0.4 + 0.6 * p.life), 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
   ctx.globalAlpha = 1;
 
