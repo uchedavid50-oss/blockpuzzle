@@ -1,5 +1,6 @@
 import { SIZE, canPlace, canPlaceAnywhere, emptyGrid, hasMoves, place, shapeSize, type Grid, type Shape } from "./board";
 import { drawTray, shapeAt, shapeIndex } from "./pieces";
+import { haptics } from "./haptics";
 import { isMuted, sfx, soundState, toggleMute, unlock } from "./sound";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
@@ -158,12 +159,20 @@ const HINT_KEY = "blockpuzzle.hintSeen";
 // ---- Transient effects (purely visual; never affect game logic) ---------------
 
 interface ClearCell { r: number; c: number; ci: number; delay: number; fired: boolean }
-interface Clear { cells: ClearCell[]; t: number; lines: number }
+interface Clear { cells: ClearCell[]; t: number; lines: number; count: number }
 interface Ring { x: number; y: number; t: number; max: number; color: string; w: number }
 let rings: Ring[] = [];
+interface Praise { text: string; t: number; level: number }
+let praises: Praise[] = [];
+const PRAISE = ["Nice!", "Great!", "Awesome!", "Fantastic!", "Unreal!"];
+const PRAISE_COLORS = ["#7fe3a8", "#5ec8ff", "#ffc555", "#ff8a5c", "#ff5fa8"];
+let flash = 0; // full-screen white pulse on big clears
+let jellyAmp = 0; // the board wobbles after a clear
+let jellyT = 0;
+let idleT = 0; // seconds since the player last did anything
 let scorePulse = 0;
 let clears: Clear[] = [];
-interface Particle { x: number; y: number; vx: number; vy: number; life: number; size: number; color: string; g?: number; spark?: boolean }
+interface Particle { x: number; y: number; vx: number; vy: number; life: number; size: number; color: string; g?: number; spark?: boolean; star?: boolean; rot?: number; vr?: number }
 let particles: Particle[] = [];
 interface Floater { x: number; y: number; text: string; sub: string; t: number }
 let floaters: Floater[] = [];
@@ -230,6 +239,7 @@ function undo(): void {
   shownScore = state.score;
   snap = null;
   sfx.place();
+  haptics.undo();
   save();
 }
 
@@ -279,14 +289,14 @@ function reset(daily: string | null = null): void {
   state = newState(daily);
   snap = null;
   shownScore = 0;
-  clears = []; particles = []; floaters = []; returning = []; rings = [];
+  clears = []; particles = []; floaters = []; returning = []; rings = []; praises = []; flash = 0;
   overT = 0;
   save();
 }
 
 // ---- Drag ----------------------------------------------------------------------
 
-interface Drag { slot: number; shape: Shape; px: number; py: number; pointerId: number; touch: boolean; k: number }
+interface Drag { slot: number; shape: Shape; px: number; py: number; pointerId: number; touch: boolean; k: number; vx: number }
 let drag: Drag | null = null;
 
 /** Where the dragged shape's top-left would land on the board (snapped), or null. */
@@ -309,6 +319,7 @@ function slotAt(x: number, y: number): number {
 
 canvas.addEventListener("pointerdown", (e) => {
   unlock(); // must happen on the gesture itself, not on pointerup
+  idleT = 0;
   const [mx, my] = muteCenter();
   if (Math.hypot(e.clientX - mx, e.clientY - my) <= MUTE_R + 6) { toggleMute(); return; }
   if (hintOn) { hintPress = true; return; }
@@ -318,7 +329,7 @@ canvas.addEventListener("pointerdown", (e) => {
     return;
   }
   const [tx, ty] = THEME_C();
-  if (Math.hypot(e.clientX - tx, e.clientY - ty) <= 19) { applyTheme(themeIdx + 1); themeShownAt = clock; return; }
+  if (Math.hypot(e.clientX - tx, e.clientY - ty) <= 19) { applyTheme(themeIdx + 1); themeShownAt = clock; haptics.tick(); return; }
   if (inRect(CHIP, e.clientX, e.clientY)) { startDaily(state.daily ? null : today()); return; }
   if (canUndo() && inRect(undoRect(), e.clientX, e.clientY)) { undo(); return; }
   if (drag) return;
@@ -326,11 +337,17 @@ canvas.addEventListener("pointerdown", (e) => {
   const shape = slot >= 0 ? state.tray[slot] : null;
   if (!shape) return;
   canvas.setPointerCapture(e.pointerId);
-  drag = { slot, shape, px: e.clientX, py: e.clientY, pointerId: e.pointerId, touch: e.pointerType !== "mouse", k: 0 };
+  drag = { slot, shape, px: e.clientX, py: e.clientY, pointerId: e.pointerId, touch: e.pointerType !== "mouse", k: 0, vx: 0 };
+  haptics.pick();
+  sfx.pick();
 });
 
 canvas.addEventListener("pointermove", (e) => {
-  if (drag && e.pointerId === drag.pointerId) { drag.px = e.clientX; drag.py = e.clientY; }
+  idleT = 0;
+  if (drag && e.pointerId === drag.pointerId) {
+    drag.vx = drag.vx * 0.6 + (e.clientX - drag.px) * 0.4; // sway the held piece with your hand
+    drag.px = e.clientX; drag.py = e.clientY;
+  }
 });
 
 canvas.addEventListener("pointerup", (e) => {
@@ -399,7 +416,7 @@ canvas.addEventListener("pointerup", (e) => {
       const lr = t.row + (pr - 1) / 2;
       const lc = t.col + (pc - 1) / 2;
       clears.push({
-        lines, t: 0,
+        lines, t: 0, count: 0,
         cells: list.map(([r, c]) => ({
           r, c, ci: colorGrid[r]![c]!, fired: false,
           // The wave travels outward from where the piece landed.
@@ -413,16 +430,32 @@ canvas.addEventListener("pointerup", (e) => {
         colorGrid[r]![c] = -1;
       }
       rings.push({ x: sx / list.length, y: sy / list.length, t: 0, max: cell * (2.2 + lines * 0.5), color: lines >= 2 ? COLORS.combo : "#ffffff", w: 2.5 + lines * 0.5 });
-      const labels = ["", "", "Double!", "Triple!", "Quad!", "Incredible!"];
-      floaters.push({
-        x: sx / list.length, y: sy / list.length,
-        text: `+${res.points}`, sub: labels[Math.min(lines, 5)] ?? "", t: 0,
-      });
+      floaters.push({ x: sx / list.length, y: sy / list.length, text: `+${res.points}`, sub: "", t: 0 });
+
+      // Praise banner, scaled to how well that move went.
+      const level = Math.min(5, lines >= 2 ? lines + (res.combo >= 3 ? 1 : 0) : res.combo >= 2 ? 1 : 0);
+      if (level > 0) { praises.push({ text: PRAISE[level - 1]!, t: 0, level }); sfx.praise(level); }
+      if (lines >= 2 || res.combo >= 3) flash = Math.min(0.5, 0.14 + lines * 0.08);
+      jellyAmp = Math.min(1, 0.3 + lines * 0.2);
+      jellyT = 0;
+      if (!reduceMotion && lines >= 2) {
+        // Confetti stars, thrown up from the middle of the clear.
+        for (let i = 0; i < lines * 9; i++) {
+          const a = -Math.PI / 2 + (Math.random() - 0.5) * 2.4;
+          const v = 220 + Math.random() * 320;
+          particles.push({
+            x: sx / list.length, y: sy / list.length, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1.4,
+            size: 5 + Math.random() * 5, color: i % 3 === 0 ? "#ffd75e" : PALETTE[i % PALETTE.length]!,
+            star: true, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 12, g: 520,
+          });
+        }
+      }
       if (lines >= 2 || res.combo >= 3) shake = Math.min(1, 0.35 + lines * 0.15);
       sfx.clear(lines, state.combo);
-      navigator.vibrate?.(lines >= 2 ? [18, 30, 18] : 14);
+      haptics.clear(lines, res.combo);
     } else {
       sfx.place();
+      haptics.drop();
     }
 
     state.grid = res.grid;
@@ -435,13 +468,15 @@ canvas.addEventListener("pointerup", (e) => {
       try { localStorage.setItem(bestKey(state.daily), String(state.best)); } catch { /* ignore */ }
     }
     const remaining = state.tray.filter((s): s is Shape => s !== null);
-    if (!hasMoves(state.grid, remaining)) { state.over = true; overT = 0; sfx.gameOver(); }
+    if (!hasMoves(state.grid, remaining)) { state.over = true; overT = 0; sfx.gameOver(); haptics.gameOver(); }
     save();
   } else {
     const d = dragDraw(drag);
     returning.push({ shape: drag.shape, color: PALETTE[color]!, x0: d.cx, y0: d.cy, s0: d.s, slot: drag.slot, t: 0 });
     sfx.invalid();
+    haptics.invalid();
   }
+  idleT = 0;
   drag = null;
 });
 
@@ -526,6 +561,8 @@ function drawShape(shape: Shape, x: number, y: number, s: number, hex: string): 
 }
 
 /** Centre and cell size of the piece being dragged, easing from its tray slot up to the pointer. */
+const easeOutBack = (t: number): number => 1 + 2.70158 * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2);
+
 function dragDraw(d: Drag): { cx: number; cy: number; s: number } {
   const e = 1 - Math.pow(1 - d.k, 3);
   const slot = slotRect(d.slot);
@@ -533,13 +570,18 @@ function dragDraw(d: Drag): { cx: number; cy: number; s: number } {
   return {
     cx: slot.x + slot.size / 2 + (d.px - (slot.x + slot.size / 2)) * e,
     cy: slot.y + slot.size / 2 + (d.py - lift - (slot.y + slot.size / 2)) * e,
-    s: trayCell + (cell - trayCell) * e,
+    s: trayCell + (cell - trayCell) * easeOutBack(d.k), // overshoots, then settles: the pick-up "pop"
   };
 }
 
-function drawCentered(shape: Shape, cx: number, cy: number, s: number, hex: string): void {
+function drawCentered(shape: Shape, cx: number, cy: number, s: number, hex: string, rot = 0): void {
   const { rows, cols } = shapeSize(shape);
-  drawShape(shape, cx - (cols * s) / 2, cy - (rows * s) / 2, s, hex);
+  if (!rot) { drawShape(shape, cx - (cols * s) / 2, cy - (rows * s) / 2, s, hex); return; }
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rot);
+  drawShape(shape, -(cols * s) / 2, -(rows * s) / 2, s, hex);
+  ctx.restore();
 }
 
 function drawMute(): void {
@@ -723,16 +765,23 @@ function render(dt: number): void {
     for (const cc of cl.cells)
       if (!cc.fired && cl.t >= cc.delay) {
         cc.fired = true;
+        if (cl.count++ % 2 === 0) sfx.tick(cl.count >> 1);
+        if (!reduceMotion) rings.push({ x: boardX + (cc.c + 0.5) * cell, y: boardY + (cc.r + 0.5) * cell, t: 0, max: cell * 0.85, color: PALETTE[cc.ci < 0 ? 0 : cc.ci]!, w: 2 });
         burst(boardX + (cc.c + 0.5) * cell, boardY + (cc.r + 0.5) * cell, PALETTE[cc.ci < 0 ? 0 : cc.ci]!, cl.lines);
       }
   }
   clears = clears.filter((cl) => cl.t < 1);
+  praises = praises.filter((pr) => (pr.t += dt * 0.95) < 1);
+  flash = Math.max(0, flash - dt * 2.6);
+  jellyT += dt;
+  if (!drag && !state.over && !hintOn) idleT += dt; else idleT = 0;
+  if (drag) drag.vx *= Math.max(0, 1 - dt * 9);
   for (const r of rings) r.t += dt * 2.4;
   rings = rings.filter((r) => r.t < 1);
   scorePulse = Math.max(0, scorePulse - dt * 4);
   shake = Math.max(0, shake - dt * 3.5);
   for (const row of pop) for (let c = 0; c < SIZE; c++) row[c] = Math.max(0, row[c]! - dt * 3);
-  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g ?? 700) * dt; p.life -= dt * 1.5; }
+  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g ?? 700) * dt; p.life -= dt * 1.5; if (p.vr) p.rot = (p.rot ?? 0) + p.vr * dt; }
   particles = particles.filter((p) => p.life > 0);
   for (const f of floaters) f.t += dt * 1.1;
   floaters = floaters.filter((f) => f.t < 1);
@@ -756,6 +805,13 @@ function render(dt: number): void {
   drawHud();
   drawMute();
   drawControls();
+  const jk = reduceMotion ? 0 : jellyAmp * Math.exp(-6 * jellyT) * Math.sin(jellyT * 26) * 0.04;
+  const jcx = boardX + (cell * SIZE) / 2;
+  const jcy = boardY + (cell * SIZE) / 2;
+  ctx.save();
+  ctx.translate(jcx, jcy);
+  ctx.scale(1 + jk, 1 - jk * 0.8);
+  ctx.translate(-jcx, -jcy);
   drawBoard();
 
   // Cleared cells: wait for the wave to arrive, then swell, flash white and shrink away.
@@ -810,6 +866,8 @@ function render(dt: number): void {
     }
   }
 
+  ctx.restore();
+
   // Tray
   state.tray.forEach((shape, i) => {
     const slot = slotRect(i);
@@ -820,7 +878,10 @@ function render(dt: number): void {
     if (!shape || drag?.slot === i || returning.some((r) => r.slot === i)) return;
     const fits = canPlaceAnywhere(state.grid, shape);
     ctx.globalAlpha = fits ? 1 : 0.28;
-    drawCentered(shape, slot.x + slot.size / 2, slot.y + slot.size / 2, trayCell, PALETTE[colorIndex(shape)]!);
+    // After a few idle seconds the first playable piece bounces, nudging the player.
+    const nudge = idleT > 6 && fits && !reduceMotion && state.tray.findIndex((t) => t && canPlaceAnywhere(state.grid, t)) === i;
+    const bob = nudge ? Math.abs(Math.sin(clock * 5)) : 0;
+    drawCentered(shape, slot.x + slot.size / 2, slot.y + slot.size / 2 - bob * 8, trayCell * (1 + bob * 0.12), PALETTE[colorIndex(shape)]!);
     ctx.globalAlpha = 1;
   });
 
@@ -828,7 +889,7 @@ function render(dt: number): void {
     const e = 1 - Math.pow(1 - r.t, 3);
     const slot = slotRect(r.slot);
     drawCentered(r.shape,
-      r.x0 + (slot.x + slot.size / 2 - r.x0) * e,
+      r.x0 + (slot.x + slot.size / 2 - r.x0) * e + (reduceMotion ? 0 : Math.sin(r.t * 30) * 7 * (1 - r.t)),
       r.y0 + (slot.y + slot.size / 2 - r.y0) * e,
       r.s0 + (trayCell - r.s0) * e, r.color);
   }
@@ -839,7 +900,7 @@ function render(dt: number): void {
     ctx.shadowColor = "rgba(0,0,0,0.5)";
     ctx.shadowBlur = 22;
     ctx.shadowOffsetY = 10;
-    drawCentered(drag.shape, d.cx, d.cy, d.s, PALETTE[colorIndex(drag.shape)]!);
+    drawCentered(drag.shape, d.cx, d.cy, d.s, PALETTE[colorIndex(drag.shape)]!, reduceMotion ? 0 : Math.max(-0.3, Math.min(0.3, drag.vx * 0.03)));
     ctx.restore();
   }
 
@@ -856,7 +917,17 @@ function render(dt: number): void {
 
   for (const p of particles) {
     ctx.globalAlpha = Math.max(0, p.life);
-    if (p.spark) {
+    if (p.star) {
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const rad = (i % 2 ? 0.45 : 1) * p.size * (0.5 + 0.5 * Math.min(1, p.life));
+        const a = (p.rot ?? 0) + (i * Math.PI) / 5 - Math.PI / 2;
+        ctx.lineTo(p.x + Math.cos(a) * rad, p.y + Math.sin(a) * rad);
+      }
+      ctx.closePath();
+      ctx.fill();
+    } else if (p.spark) {
       ctx.strokeStyle = p.color;
       ctx.lineWidth = Math.max(1, p.size * 0.7);
       ctx.lineCap = "round";
@@ -895,6 +966,13 @@ function render(dt: number): void {
     }
     ctx.restore();
   }
+
+  if (flash > 0 && !reduceMotion) {
+    ctx.fillStyle = `rgba(255,255,255,${flash})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  for (const pr of praises) drawPraise(pr);
 
   if (state.over) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -964,6 +1042,37 @@ function render(dt: number): void {
   }
 
   if (hintOn) drawHint(dtLast);
+}
+
+/** Big bouncy banner in the middle of the board: pops in with overshoot, holds, then floats off. */
+function drawPraise(pr: Praise): void {
+  const t = pr.t;
+  const pop = t < 0.18 ? easeOutBack(t / 0.18) : 1;
+  const fade = t > 0.72 ? 1 - (t - 0.72) / 0.28 : 1;
+  const rise = t > 0.72 ? ((t - 0.72) / 0.28) * cell * 0.9 : 0;
+  const size = Math.round(cell * (1.05 + pr.level * 0.12));
+  const color = PRAISE_COLORS[pr.level - 1]!;
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, fade);
+  ctx.translate(W / 2, boardY + cell * 3.4 - rise);
+  ctx.rotate(-0.07 + (reduceMotion ? 0 : Math.sin(t * 14) * 0.02));
+  ctx.scale(pop, pop);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = `900 ${size}px ${FONT}`;
+  ctx.lineJoin = "round";
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 28;
+  ctx.strokeStyle = "rgba(10,12,20,0.9)";
+  ctx.lineWidth = size * 0.22;
+  ctx.strokeText(pr.text, 0, 0);
+  ctx.shadowBlur = 0;
+  const g = ctx.createLinearGradient(0, -size / 2, 0, size / 2);
+  g.addColorStop(0, "#ffffff");
+  g.addColorStop(1, color);
+  ctx.fillStyle = g;
+  ctx.fillText(pr.text, 0, 0);
+  ctx.restore();
 }
 
 function drawHint(dt: number): void {

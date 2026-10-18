@@ -92,6 +92,15 @@ export const sfx = {
       tone({ freq: f, to: f * 1.4, dur: 0.18, type: "sine", gain: 0.2, delay: i * 0.06 });
     }
   },
+  /** Tiny rising tick, one per cell as the clear ripples outward. */
+  tick: (i: number) => tone({ freq: 700 * Math.pow(1.07, Math.min(i, 10)), dur: 0.07, type: "sine", gain: 0.08 }),
+  pick: () => tone({ freq: 620, to: 840, dur: 0.06, type: "sine", gain: 0.09 }),
+  /** Fanfare for a big clear: a rising arpeggio, longer for higher tiers. */
+  praise: (level: number) => {
+    const notes = [523, 659, 784, 1047, 1319, 1568];
+    for (let i = 0; i < Math.min(notes.length, level + 2); i++)
+      tone({ freq: notes[i]!, dur: 0.22, type: "triangle", gain: 0.16, delay: 0.05 + i * 0.07 });
+  },
   gameOver: () => {
     tone({ freq: 520, to: 260, dur: 0.35, type: "triangle", gain: 0.2 });
     tone({ freq: 330, to: 165, dur: 0.5, type: "sine", gain: 0.16, delay: 0.14 });
