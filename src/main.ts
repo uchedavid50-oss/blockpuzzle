@@ -1,5 +1,6 @@
 import { PERFECT_BONUS, SIZE, canPlace, canPlaceAnywhere, emptyGrid, hasMoves, isEmpty, place, shapeSize, type Grid, type Shape } from "./board";
 import { drawTray, shapeAt, shapeIndex } from "./pieces";
+import { challengeUrl, parseChallenge, randomSeed, type Challenge } from "./challenge";
 import { haptic, haptics } from "./haptics";
 import { isMuted, sfx, soundState, toggleMute, unlock } from "./sound";
 
@@ -15,6 +16,8 @@ interface State {
   over: boolean;
   daily: string | null; // YYYY-MM-DD when playing that day's shared sequence
   undoLeft: number; // one rewind per game
+  seed: string; // fixes the piece sequence; the date for a daily, otherwise random or from a challenge link
+  challenge: number | null; // target score when playing a friend's challenge
   trays: number; // trays dealt so far; with the date it fixes the daily sequence
 }
 
@@ -40,12 +43,12 @@ const yesterday = (): string => {
 
 interface Stats {
   games: number; finished: number; total: number; bestScore: number; bestCombo: number;
-  lines: number; perfects: number; moves: number; bestStreak: number;
+  lines: number; perfects: number; moves: number; bestStreak: number; challengesWon: number;
 }
 const STATS_KEY = "blockpuzzle.stats";
 const BADGES_KEY = "blockpuzzle.badges";
 const SEEN_KEY = "blockpuzzle.badgesSeen";
-const blankStats = (): Stats => ({ games: 0, finished: 0, total: 0, bestScore: 0, bestCombo: 0, lines: 0, perfects: 0, moves: 0, bestStreak: 0 });
+const blankStats = (): Stats => ({ games: 0, finished: 0, total: 0, bestScore: 0, bestCombo: 0, lines: 0, perfects: 0, moves: 0, bestStreak: 0, challengesWon: 0 });
 const stats: Stats = (() => {
   try {
     const d = JSON.parse(localStorage.getItem(STATS_KEY) ?? "null") as Partial<Stats> | null;
@@ -88,6 +91,7 @@ const BADGES: Badge[] = [
   { id: "streak3", name: "Regular", desc: "Play the daily 3 days in a row.", ok: () => stats.bestStreak >= 3, progress: () => [stats.bestStreak, 3] },
   { id: "streak7", name: "Devoted", desc: "Play the daily 7 days in a row.", ok: () => stats.bestStreak >= 7, progress: () => [stats.bestStreak, 7], reward: "Aurora theme" },
   { id: "streak30", name: "Marathon", desc: "Play the daily 30 days in a row.", ok: () => stats.bestStreak >= 30, progress: () => [stats.bestStreak, 30] },
+  { id: "rival", name: "Rival", desc: "Beat a friend's challenge score.", ok: () => stats.challengesWon >= 1 },
   { id: "perfect", name: "Spotless", desc: "Clear the entire board.", ok: () => stats.perfects >= 1, reward: "Midnight theme" },
 ];
 
@@ -154,8 +158,7 @@ function seeded(seed: string): () => number {
 }
 
 /** Tray number n for the given mode. Each daily tray has its own stream, so retries cannot shift later trays. */
-const makeTray = (grid: Grid, daily: string | null, n: number): Shape[] =>
-  drawTray(grid, daily ? seeded(`${daily}:${n}`) : undefined);
+const makeTray = (grid: Grid, seed: string, n: number): Shape[] => drawTray(grid, seeded(`${seed}:${n}`));
 
 // Visual-only: which gem colour each filled cell wears. The rules never read it.
 const THEMES: { name: string; colors: string[]; req?: string }[] = [
@@ -199,12 +202,16 @@ let colorGrid = blankColors();
 let pop = blankPop();
 let startBest = loadBest();
 
-function newState(daily: string | null = null): State {
+function newState(daily: string | null = null, ch: Challenge | null = null): State {
   colorGrid = blankColors();
   pop = blankPop();
   startBest = loadBest(daily);
   const grid = emptyGrid();
-  return { grid, tray: makeTray(grid, daily, 0), score: 0, best: loadBest(daily), combo: 0, over: false, daily, trays: 1, undoLeft: daily ? 1 : 1 + perkUndos() };
+  const seed = daily ?? ch?.seed ?? randomSeed();
+  return {
+    grid, tray: makeTray(grid, seed, 0), score: 0, best: loadBest(daily), combo: 0, over: false, daily, trays: 1,
+    undoLeft: daily || ch ? 1 : 1 + perkUndos(), seed, challenge: ch ? ch.target : null,
+  };
 }
 
 // ---- Saving a game in progress ------------------------------------------------
@@ -219,6 +226,8 @@ function save(): void {
       s: state.score,
       c: state.combo,
       d: state.daily,
+      sd: state.seed,
+      ch: state.challenge,
       n: state.trays,
       u: state.undoLeft,
       k: colorGrid.flat().map((v) => (v < 0 ? "-" : String(v))).join(""),
@@ -230,7 +239,7 @@ function load(): State | null {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
-    const d = JSON.parse(raw) as { g: string; t: number[]; s: number; c: number; k?: string; d?: string | null; n?: number; u?: number };
+    const d = JSON.parse(raw) as { g: string; t: number[]; s: number; c: number; k?: string; d?: string | null; n?: number; u?: number; sd?: string; ch?: number | null };
     if (typeof d?.g !== "string" || d.g.length !== SIZE * SIZE || !Array.isArray(d.t)) return null;
     const grid = Array.from({ length: SIZE }, (_, r) =>
       Array.from({ length: SIZE }, (_, c) => d.g[r * SIZE + c] === "1"));
@@ -248,6 +257,8 @@ function load(): State | null {
     return {
       grid, tray, score: Number(d.s) || 0, best: loadBest(daily), combo: Number(d.c) || 0, over: false,
       daily, trays: Number(d.n) || 1, undoLeft: d.u === 0 ? 0 : 1,
+      seed: typeof d.sd === "string" && /^[a-z0-9-]{3,24}$/i.test(d.sd) ? d.sd : daily ?? randomSeed(),
+      challenge: typeof d.ch === "number" ? d.ch : null,
     };
   } catch {
     return null;
@@ -271,6 +282,20 @@ let flash = 0; // full-screen white pulse on big clears
 let jellyAmp = 0; // the board wobbles after a clear
 let jellyT = 0;
 let idleT = 0; // seconds since the player last did anything
+let challengeBeaten = state.challenge !== null && state.score > state.challenge;
+// Opened from a friend's link: offer the challenge before touching the current game.
+let chIntro: Challenge | null = (() => {
+  try {
+    const c = parseChallenge(location.search);
+    if (c) history.replaceState(null, "", location.pathname);
+    return c;
+  } catch { return null; }
+})();
+let chPress: "play" | "skip" | null = null;
+let chT = 0;
+const chHit = (x: number, y: number): "play" | "skip" | null =>
+  Math.abs(x - W / 2) <= 100 && y >= H / 2 + 66 && y <= H / 2 + 126 ? "play"
+  : Math.abs(x - W / 2) <= 100 && y >= H / 2 + 132 && y <= H / 2 + 176 ? "skip" : null;
 let statsOn = false;
 let statsT = 0;
 let statsPress: { x: number; y: number } | null = null;
@@ -381,8 +406,9 @@ function overHit(x: number, y: number): "share" | "again" | "mode" | "undo" {
 async function shareScore(): Promise<void> {
   const text = state.daily
     ? `Block Puzzle daily ${state.daily}: I scored ${state.score}. Can you beat it?`
-    : `I scored ${state.score} in Block Puzzle. Can you beat it?`;
-  const url = location.origin;
+    : `I scored ${state.score} in Block Puzzle. Beat me on the exact same pieces!`;
+  // A random game's link carries its seed, so a friend plays the same pieces against my score.
+  const url = state.daily ? location.origin : challengeUrl(location.origin, state.seed, state.score);
   try {
     if (navigator.share) {
       await navigator.share({ text, url });
@@ -397,8 +423,9 @@ async function shareScore(): Promise<void> {
   }
 }
 
-function reset(daily: string | null = null): void {
-  state = newState(daily);
+function reset(daily: string | null = null, ch: Challenge | null = null): void {
+  state = newState(daily, ch);
+  challengeBeaten = false;
   snap = null;
   gameCounted = false;
   banked = 0;
@@ -437,6 +464,7 @@ canvas.addEventListener("pointerdown", (e) => {
   const [mx, my] = muteCenter();
   if (Math.hypot(e.clientX - mx, e.clientY - my) <= MUTE_R + 6) { toggleMute(); return; }
   if (hintOn) { hintPress = true; return; }
+  if (chIntro) { chPress = chHit(e.clientX, e.clientY); return; }
   if (statsOn) { statsPress = { x: e.clientX, y: e.clientY }; return; }
   if (state.over) {
     // Act on release, not press: share() needs a completed gesture on iOS.
@@ -472,6 +500,16 @@ canvas.addEventListener("pointermove", (e) => {
 });
 
 canvas.addEventListener("pointerup", (e) => {
+  if (chPress && chIntro) {
+    const want = chPress;
+    const ch = chIntro;
+    chPress = null;
+    if (chHit(e.clientX, e.clientY) !== want) return;
+    chIntro = null;
+    chT = 0;
+    if (want === "play") reset(null, ch);
+    return;
+  }
   if (statsPress) {
     const down = statsPress;
     statsPress = null;
@@ -505,7 +543,7 @@ canvas.addEventListener("pointerup", (e) => {
     if (want === "share") void shareScore();
     else if (want === "undo") undo();
     else if (want === "mode") reset(state.daily ? null : today());
-    else reset(state.daily);
+    else reset(state.daily, state.challenge !== null ? { seed: state.seed, target: state.challenge } : null); // a lost challenge replays the same pieces
     return;
   }
   if (!drag || e.pointerId !== drag.pointerId) return;
@@ -629,8 +667,18 @@ canvas.addEventListener("pointerup", (e) => {
     if (perfect) stats.perfects++;
     saveStats();
     checkBadges({ lines, combo: res.combo, perfect });
+    if (state.challenge !== null && !challengeBeaten && state.score > state.challenge) {
+      challengeBeaten = true;
+      stats.challengesWon++;
+      saveStats();
+      praises.push({ text: "Beaten!", t: 0, level: 5 });
+      sfx.praise(5);
+      flash = Math.max(flash, 0.35);
+      haptic([30, 40, 30, 40, 90]);
+      checkBadges(null);
+    }
     state.tray[drag.slot] = null;
-    if (state.tray.every((s) => s === null)) state.tray = makeTray(state.grid, state.daily, state.trays++);
+    if (state.tray.every((s) => s === null)) state.tray = makeTray(state.grid, state.seed, state.trays++);
     if (state.score > state.best) {
       state.best = state.score;
       try { localStorage.setItem(bestKey(state.daily), String(state.best)); } catch { /* ignore */ }
@@ -775,8 +823,8 @@ function label(text: string, x: number, y: number, align: CanvasTextAlign): void
 }
 
 function drawHud(): void {
-  label(state.daily ? "DAILY" : "SCORE", 22, 20, "left");
-  label(state.daily ? "BEST TODAY" : "BEST", W - 22, 20, "right");
+  label(state.challenge !== null ? "CHALLENGE" : state.daily ? "DAILY" : "SCORE", 22, 20, "left");
+  label(state.challenge !== null ? "TARGET" : state.daily ? "BEST TODAY" : "BEST", W - 22, 20, "right");
   ctx.fillStyle = COLORS.text;
   ctx.font = `700 28px ${FONT}`;
   ctx.textAlign = "left";
@@ -787,8 +835,9 @@ function drawHud(): void {
   ctx.fillText(String(Math.round(shownScore)), 0, 0);
   ctx.restore();
   ctx.textAlign = "right";
-  ctx.fillStyle = state.score >= state.best && state.score > 0 ? COLORS.combo : COLORS.text;
-  ctx.fillText(String(state.best), W - 22, 43);
+  const beating = state.challenge !== null ? state.score > state.challenge : state.score >= state.best && state.score > 0;
+  ctx.fillStyle = beating ? COLORS.combo : COLORS.text;
+  ctx.fillText(String(state.challenge ?? state.best), W - 22, 43);
 
   if (state.combo < 2) {
     ctx.fillStyle = COLORS.dim;
@@ -1198,18 +1247,20 @@ function render(dt: number): void {
     ctx.strokeStyle = "rgba(255,255,255,0.09)";
     ctx.stroke();
 
-    const isBest = state.score > 0 && state.score > startBest;
+    const ch = state.challenge;
+    const won = ch !== null && state.score > ch;
+    const isBest = ch === null && state.score > 0 && state.score > startBest;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillStyle = COLORS.dim;
     ctx.font = `700 12px ${FONT}`;
-    ctx.fillText(isBest ? "NEW BEST" : "NO MOVES LEFT", 0, -92);
-    ctx.fillStyle = isBest ? COLORS.combo : COLORS.text;
+    ctx.fillText(ch !== null ? (won ? "CHALLENGE WON" : state.score === ch ? "TIED" : "CHALLENGE LOST") : isBest ? "NEW BEST" : "NO MOVES LEFT", 0, -92);
+    ctx.fillStyle = isBest || won ? COLORS.combo : COLORS.text;
     ctx.font = `800 58px ${FONT}`;
     ctx.fillText(String(state.score), 0, -42);
     ctx.fillStyle = COLORS.dim;
     ctx.font = `600 14px ${FONT}`;
-    ctx.fillText(`Best ${state.best}`, 0, 8);
+    ctx.fillText(ch !== null ? (won ? `Beat ${ch} by ${state.score - ch}` : `${ch - state.score} short of ${ch}`) : `Best ${state.best}`, 0, 8);
 
     const bgrad = ctx.createLinearGradient(0, 40, 0, 94);
     bgrad.addColorStop(0, "#6cb4ff");
@@ -1243,6 +1294,7 @@ function render(dt: number): void {
   }
 
   for (const t of toasts.slice(0, 1)) drawToast(t);
+  if (chIntro && !hintOn) drawChallengeIntro(dtLast);
   if (statsOn) drawStats();
   if (hintOn) drawHint(dtLast);
 }
@@ -1481,6 +1533,69 @@ function drawStats(): void {
   ctx.font = `700 16px ${FONT}`;
   ctx.textAlign = "center";
   ctx.fillText("Close", 0, 312);
+  ctx.restore();
+}
+
+function drawChallengeIntro(dt: number): void {
+  chT = Math.min(1, chT + dt * 2.2);
+  const e = 1 - Math.pow(1 - chT, 3);
+  const ch = chIntro!;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = `rgba(7,9,14,${0.88 * e})`;
+  ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  ctx.globalAlpha = e;
+  ctx.translate(W / 2, H / 2 + (1 - e) * 24);
+  const cw = Math.min(W - 40, 330);
+  const card = ctx.createLinearGradient(0, -170, 0, 190);
+  card.addColorStop(0, "#2a2447");
+  card.addColorStop(1, "#151a2a");
+  ctx.shadowColor = "rgba(0,0,0,0.6)";
+  ctx.shadowBlur = 40;
+  ctx.fillStyle = card;
+  ctx.beginPath();
+  ctx.roundRect(-cw / 2, -170, cw, 360, 26);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(255,197,85,0.35)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = COLORS.combo;
+  ctx.font = `800 13px ${FONT}`;
+  ctx.fillText("A FRIEND CHALLENGED YOU", 0, -128);
+  ctx.fillStyle = COLORS.text;
+  ctx.font = `600 16px ${FONT}`;
+  ctx.fillText("Beat this score", 0, -92);
+  const g = ctx.createLinearGradient(0, -70, 0, -10);
+  g.addColorStop(0, "#fff0b3");
+  g.addColorStop(1, "#ffb42e");
+  ctx.fillStyle = g;
+  ctx.font = `900 68px ${FONT}`;
+  ctx.fillText(ch.target.toLocaleString(), 0, -40);
+  ctx.fillStyle = COLORS.dim;
+  ctx.font = `500 14px ${FONT}`;
+  ctx.fillText("on the exact same pieces they got.", 0, 8);
+  if (state.score > 0 && !state.over) {
+    ctx.font = `500 12px ${FONT}`;
+    ctx.fillText("This replaces your current game.", 0, 34);
+  }
+
+  const bg = ctx.createLinearGradient(0, 66, 0, 126);
+  bg.addColorStop(0, "#ffd166");
+  bg.addColorStop(1, "#f59e0b");
+  ctx.fillStyle = bg;
+  ctx.beginPath();
+  ctx.roundRect(-100, 66, 200, 56, 28);
+  ctx.fill();
+  ctx.fillStyle = "#2a1a00";
+  ctx.font = `800 19px ${FONT}`;
+  ctx.fillText("Accept challenge", 0, 95);
+  ctx.fillStyle = COLORS.dim;
+  ctx.font = `600 15px ${FONT}`;
+  ctx.fillText("Not now", 0, 154);
   ctx.restore();
 }
 
