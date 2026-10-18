@@ -83,3 +83,10 @@ export function shapeSize(shape: Shape): { rows: number; cols: number } {
   }
   return { rows, cols };
 }
+
+/** Extra points for clearing the whole board. */
+export const PERFECT_BONUS = 100;
+
+export function isEmpty(grid: Grid): boolean {
+  return grid.every((row) => row.every((c) => !c));
+}

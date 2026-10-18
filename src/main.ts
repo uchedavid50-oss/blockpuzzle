@@ -1,6 +1,6 @@
-import { SIZE, canPlace, canPlaceAnywhere, emptyGrid, hasMoves, place, shapeSize, type Grid, type Shape } from "./board";
+import { PERFECT_BONUS, SIZE, canPlace, canPlaceAnywhere, emptyGrid, hasMoves, isEmpty, place, shapeSize, type Grid, type Shape } from "./board";
 import { drawTray, shapeAt, shapeIndex } from "./pieces";
-import { haptics } from "./haptics";
+import { haptic, haptics } from "./haptics";
 import { isMuted, sfx, soundState, toggleMute, unlock } from "./sound";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
@@ -36,6 +36,71 @@ const yesterday = (): string => {
   return dateStr(new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1));
 };
 
+// ---- Lifetime stats and milestone badges (device-local) -------------------------
+
+interface Stats {
+  games: number; finished: number; total: number; bestScore: number; bestCombo: number;
+  lines: number; perfects: number; moves: number; bestStreak: number;
+}
+const STATS_KEY = "blockpuzzle.stats";
+const BADGES_KEY = "blockpuzzle.badges";
+const SEEN_KEY = "blockpuzzle.badgesSeen";
+const blankStats = (): Stats => ({ games: 0, finished: 0, total: 0, bestScore: 0, bestCombo: 0, lines: 0, perfects: 0, moves: 0, bestStreak: 0 });
+const stats: Stats = (() => {
+  try {
+    const d = JSON.parse(localStorage.getItem(STATS_KEY) ?? "null") as Partial<Stats> | null;
+    return { ...blankStats(), ...(d ?? {}) };
+  } catch { return blankStats(); }
+})();
+const saveStats = (): void => {
+  try { localStorage.setItem(STATS_KEY, JSON.stringify(stats)); } catch { /* ignore */ }
+};
+
+const unlocked: string[] = (() => {
+  try {
+    const d = JSON.parse(localStorage.getItem(BADGES_KEY) ?? "[]") as unknown;
+    return Array.isArray(d) ? d.filter((x): x is string => typeof x === "string") : [];
+  } catch { return []; }
+})();
+let badgesSeen = (() => { try { return Number(localStorage.getItem(SEEN_KEY)) || 0; } catch { return 0; } })();
+
+interface MoveInfo { lines: number; combo: number; perfect: boolean }
+interface Badge { id: string; name: string; desc: string; ok: (m: MoveInfo | null) => boolean }
+const BADGES: Badge[] = [
+  { id: "first", name: "First clear", desc: "Clear your first line.", ok: () => stats.lines >= 1 },
+  { id: "double", name: "Double", desc: "Clear 2 lines with one piece.", ok: (m) => !!m && m.lines >= 2 },
+  { id: "quad", name: "Quad", desc: "Clear 4 lines with one piece.", ok: (m) => !!m && m.lines >= 4 },
+  { id: "combo3", name: "On a roll", desc: "Reach a 3x combo.", ok: () => stats.bestCombo >= 3 },
+  { id: "combo5", name: "Unstoppable", desc: "Reach a 5x combo.", ok: () => stats.bestCombo >= 5 },
+  { id: "s500", name: "Sharp", desc: "Score 500 in one game.", ok: () => stats.bestScore >= 500 },
+  { id: "s1000", name: "Pro", desc: "Score 1,000 in one game.", ok: () => stats.bestScore >= 1000 },
+  { id: "s2500", name: "Legend", desc: "Score 2,500 in one game.", ok: () => stats.bestScore >= 2500 },
+  { id: "lines50", name: "Sweeper", desc: "Clear 50 lines in total.", ok: () => stats.lines >= 50 },
+  { id: "lines250", name: "Demolition", desc: "Clear 250 lines in total.", ok: () => stats.lines >= 250 },
+  { id: "games10", name: "Hooked", desc: "Play 10 games.", ok: () => stats.games >= 10 },
+  { id: "streak3", name: "Regular", desc: "Play the daily 3 days in a row.", ok: () => stats.bestStreak >= 3 },
+  { id: "streak7", name: "Devoted", desc: "Play the daily 7 days in a row.", ok: () => stats.bestStreak >= 7 },
+  { id: "perfect", name: "Spotless", desc: "Clear the entire board.", ok: () => stats.perfects >= 1 },
+];
+
+interface Toast { title: string; desc: string; t: number }
+let toasts: Toast[] = [];
+
+/** Unlocks any badge whose condition now holds and queues a pop-up for each. */
+function checkBadges(m: MoveInfo | null): void {
+  let any = false;
+  for (const b of BADGES) {
+    if (unlocked.includes(b.id) || !b.ok(m)) continue;
+    unlocked.push(b.id);
+    toasts.push({ title: b.name, desc: b.desc, t: 0 });
+    any = true;
+  }
+  if (!any) return;
+  try { localStorage.setItem(BADGES_KEY, JSON.stringify(unlocked)); } catch { /* ignore */ }
+  sfx.praise(1);
+  haptic([15, 30, 15]);
+}
+
 // Consecutive days on which a daily game was started. Device-local; no backend.
 const STREAK_KEY = "blockpuzzle.streak";
 function readStreak(): { last: string; n: number } | null {
@@ -53,6 +118,9 @@ function bumpStreak(): void {
   if (s?.last === today()) return;
   const n = s?.last === yesterday() ? s.n + 1 : 1;
   try { localStorage.setItem(STREAK_KEY, JSON.stringify({ last: today(), n })); } catch { /* ignore */ }
+  stats.bestStreak = Math.max(stats.bestStreak, n);
+  saveStats();
+  checkBadges(null);
 }
 const playedDailyToday = (): boolean => readStreak()?.last === today();
 
@@ -164,12 +232,18 @@ interface Ring { x: number; y: number; t: number; max: number; color: string; w:
 let rings: Ring[] = [];
 interface Praise { text: string; t: number; level: number }
 let praises: Praise[] = [];
-const PRAISE = ["Nice!", "Great!", "Awesome!", "Fantastic!", "Unreal!"];
-const PRAISE_COLORS = ["#7fe3a8", "#5ec8ff", "#ffc555", "#ff8a5c", "#ff5fa8"];
+const PRAISE = ["Nice!", "Great!", "Awesome!", "Fantastic!", "Unreal!", "Perfect!"];
+const PRAISE_COLORS = ["#7fe3a8", "#5ec8ff", "#ffc555", "#ff8a5c", "#ff5fa8", "#ffe27a"];
 let flash = 0; // full-screen white pulse on big clears
 let jellyAmp = 0; // the board wobbles after a clear
 let jellyT = 0;
 let idleT = 0; // seconds since the player last did anything
+let statsOn = false;
+let statsT = 0;
+let statsPress: { x: number; y: number } | null = null;
+let badgeSel = -1;
+let gameCounted = state.score > 0; // this game has been added to the games-played count
+let banked = 0; // final score already added to the lifetime total
 let scorePulse = 0;
 let clears: Clear[] = [];
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; size: number; color: string; g?: number; spark?: boolean; star?: boolean; rot?: number; vr?: number }
@@ -226,7 +300,12 @@ const canUndoOver = (): boolean => !!snap && state.undoLeft > 0 && state.over;
 
 function undo(): void {
   if (!snap || state.undoLeft <= 0 || drag) return;
-  if (state.over) { state.over = false; overT = 0; } // take back the losing move
+  if (state.over) {
+    // Take back the losing move, and the stats it banked.
+    state.over = false; overT = 0;
+    stats.total -= banked; stats.finished = Math.max(0, stats.finished - 1); banked = 0;
+    saveStats();
+  }
   state.grid = snap.grid;
   state.tray = snap.tray;
   state.score = snap.score;
@@ -288,6 +367,8 @@ async function shareScore(): Promise<void> {
 function reset(daily: string | null = null): void {
   state = newState(daily);
   snap = null;
+  gameCounted = false;
+  banked = 0;
   shownScore = 0;
   clears = []; particles = []; floaters = []; returning = []; rings = []; praises = []; flash = 0;
   overT = 0;
@@ -323,9 +404,16 @@ canvas.addEventListener("pointerdown", (e) => {
   const [mx, my] = muteCenter();
   if (Math.hypot(e.clientX - mx, e.clientY - my) <= MUTE_R + 6) { toggleMute(); return; }
   if (hintOn) { hintPress = true; return; }
+  if (statsOn) { statsPress = { x: e.clientX, y: e.clientY }; return; }
   if (state.over) {
     // Act on release, not press: share() needs a completed gesture on iOS.
     if (overT >= 0.6) overPress = overHit(e.clientX, e.clientY);
+    return;
+  }
+  if (state.combo < 2 && Math.hypot(e.clientX - W / 2, e.clientY - 30) <= 20) {
+    statsOn = true; statsT = 0; badgeSel = -1; badgesSeen = unlocked.length;
+    try { localStorage.setItem(SEEN_KEY, String(badgesSeen)); } catch { /* ignore */ }
+    haptics.tick();
     return;
   }
   const [tx, ty] = THEME_C();
@@ -351,6 +439,27 @@ canvas.addEventListener("pointermove", (e) => {
 });
 
 canvas.addEventListener("pointerup", (e) => {
+  if (statsPress) {
+    const down = statsPress;
+    statsPress = null;
+    const l = statsLayout();
+    const lx = (e.clientX - W / 2) / l.k;
+    const ly = (e.clientY - H / 2) / l.k;
+    const hit = (x: number, y: number): number => {
+      for (let i = 0; i < BADGES.length; i++) {
+        const b = badgeCell(i, l);
+        if (x >= b.x - b.w / 2 && x <= b.x + b.w / 2 && y >= b.y && y <= b.y + 62) return i;
+      }
+      return -1;
+    };
+    if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 12) return;
+    const i = hit(lx, ly);
+    if (i >= 0) { badgeSel = badgeSel === i ? -1 : i; haptics.tick(); return; }
+    const inCard = Math.abs(lx) <= l.cw / 2 && ly >= -300 && ly <= 300;
+    const onClose = Math.abs(lx) <= 90 && ly >= 244 && ly <= 292;
+    if (!inCard || onClose) statsOn = false;
+    return;
+  }
   if (hintPress) {
     hintPress = false;
     if (hintT >= 0.5) { hintOn = false; try { localStorage.setItem(HINT_KEY, "1"); } catch { /* ignore */ } }
@@ -373,6 +482,7 @@ canvas.addEventListener("pointerup", (e) => {
   if (t?.ok) {
     const res = place(state.grid, drag.shape, t.row, t.col, state.combo);
     const lines = res.rowsCleared.length + res.colsCleared.length;
+    const perfect = lines > 0 && isEmpty(res.grid);
     snap = {
       grid: state.grid, tray: [...state.tray], score: state.score, combo: state.combo,
       trays: state.trays, colors: colorGrid.map((r) => r.slice()),
@@ -430,11 +540,28 @@ canvas.addEventListener("pointerup", (e) => {
         colorGrid[r]![c] = -1;
       }
       rings.push({ x: sx / list.length, y: sy / list.length, t: 0, max: cell * (2.2 + lines * 0.5), color: lines >= 2 ? COLORS.combo : "#ffffff", w: 2.5 + lines * 0.5 });
-      floaters.push({ x: sx / list.length, y: sy / list.length, text: `+${res.points}`, sub: "", t: 0 });
+      floaters.push({ x: sx / list.length, y: sy / list.length, text: `+${res.points + (perfect ? PERFECT_BONUS : 0)}`, sub: "", t: 0 });
 
       // Praise banner, scaled to how well that move went.
       const level = Math.min(5, lines >= 2 ? lines + (res.combo >= 3 ? 1 : 0) : res.combo >= 2 ? 1 : 0);
-      if (level > 0) { praises.push({ text: PRAISE[level - 1]!, t: 0, level }); sfx.praise(level); }
+      if (perfect) {
+        // Whole board cleared: the biggest moment in the game.
+        praises.push({ text: PRAISE[5]!, t: 0, level: 6 });
+        sfx.praise(6);
+        flash = 0.6;
+        shake = 1;
+        if (!reduceMotion)
+          for (let i = 0; i < 46; i++) {
+            const a = Math.random() * Math.PI * 2;
+            const v = 200 + Math.random() * 380;
+            particles.push({
+              x: W / 2, y: boardY + (cell * SIZE) / 2, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 120, life: 1.6,
+              size: 5 + Math.random() * 6, color: i % 2 ? "#ffd75e" : PALETTE[i % PALETTE.length]!,
+              star: true, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 14, g: 480,
+            });
+          }
+        haptic([30, 30, 30, 30, 30, 30, 70, 50, 140]);
+      } else if (level > 0) { praises.push({ text: PRAISE[level - 1]!, t: 0, level }); sfx.praise(level); }
       if (lines >= 2 || res.combo >= 3) flash = Math.min(0.5, 0.14 + lines * 0.08);
       jellyAmp = Math.min(1, 0.3 + lines * 0.2);
       jellyT = 0;
@@ -459,8 +586,16 @@ canvas.addEventListener("pointerup", (e) => {
     }
 
     state.grid = res.grid;
-    state.score += res.points;
+    state.score += res.points + (perfect ? PERFECT_BONUS : 0);
     state.combo = res.combo;
+    if (!gameCounted) { gameCounted = true; stats.games++; }
+    stats.moves++;
+    stats.lines += lines;
+    stats.bestCombo = Math.max(stats.bestCombo, res.combo);
+    stats.bestScore = Math.max(stats.bestScore, state.score);
+    if (perfect) stats.perfects++;
+    saveStats();
+    checkBadges({ lines, combo: res.combo, perfect });
     state.tray[drag.slot] = null;
     if (state.tray.every((s) => s === null)) state.tray = makeTray(state.grid, state.daily, state.trays++);
     if (state.score > state.best) {
@@ -468,7 +603,12 @@ canvas.addEventListener("pointerup", (e) => {
       try { localStorage.setItem(bestKey(state.daily), String(state.best)); } catch { /* ignore */ }
     }
     const remaining = state.tray.filter((s): s is Shape => s !== null);
-    if (!hasMoves(state.grid, remaining)) { state.over = true; overT = 0; sfx.gameOver(); haptics.gameOver(); }
+    if (!hasMoves(state.grid, remaining)) {
+      state.over = true; overT = 0; sfx.gameOver(); haptics.gameOver();
+      stats.finished++; stats.total += state.score; banked = state.score;
+      saveStats();
+      checkBadges(null);
+    }
     save();
   } else {
     const d = dragDraw(drag);
@@ -616,6 +756,20 @@ function drawHud(): void {
   ctx.textAlign = "right";
   ctx.fillStyle = state.score >= state.best && state.score > 0 ? COLORS.combo : COLORS.text;
   ctx.fillText(String(state.best), W - 22, 43);
+
+  if (state.combo < 2) {
+    ctx.fillStyle = COLORS.dim;
+    ctx.font = `600 18px ${FONT}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("\u{1F3C6}", W / 2, 32);
+    if (unlocked.length > badgesSeen) {
+      ctx.fillStyle = COLORS.combo;
+      ctx.beginPath();
+      ctx.arc(W / 2 + 12, 22, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
 
   if (state.combo >= 2) {
     const pulse = 1 + (reduceMotion ? 0 : 0.06 * Math.sin(clock * 9));
@@ -772,6 +926,8 @@ function render(dt: number): void {
   }
   clears = clears.filter((cl) => cl.t < 1);
   praises = praises.filter((pr) => (pr.t += dt * 0.95) < 1);
+  if (toasts[0] && (toasts[0].t += dt / 3.2) >= 1) toasts.shift();
+  if (statsOn) statsT = Math.min(1, statsT + dt * 3);
   flash = Math.max(0, flash - dt * 2.6);
   jellyT += dt;
   if (!drag && !state.over && !hintOn) idleT += dt; else idleT = 0;
@@ -1041,6 +1197,8 @@ function render(dt: number): void {
     ctx.restore();
   }
 
+  for (const t of toasts.slice(0, 1)) drawToast(t);
+  if (statsOn) drawStats();
   if (hintOn) drawHint(dtLast);
 }
 
@@ -1072,6 +1230,177 @@ function drawPraise(pr: Praise): void {
   g.addColorStop(1, color);
   ctx.fillStyle = g;
   ctx.fillText(pr.text, 0, 0);
+  ctx.restore();
+}
+
+function star(x: number, y: number, r: number): void {
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const rad = i % 2 ? r * 0.45 : r;
+    const a = (i * Math.PI) / 5 - Math.PI / 2;
+    ctx.lineTo(x + Math.cos(a) * rad, y + Math.sin(a) * rad);
+  }
+  ctx.closePath();
+}
+
+/** Slides a "badge unlocked" card down from the top, holds, then tucks it away. */
+function drawToast(t: Toast): void {
+  const inT = Math.min(1, t.t / 0.1);
+  const outT = t.t > 0.88 ? (t.t - 0.88) / 0.12 : 0;
+  const slide = easeOutBack(inT) * (1 - outT);
+  const w = Math.min(W - 32, 320);
+  const y = -70 + slide * 190;
+  ctx.save();
+  ctx.translate(W / 2, y);
+  ctx.shadowColor = "rgba(0,0,0,0.55)";
+  ctx.shadowBlur = 24;
+  ctx.fillStyle = "#1e2438";
+  ctx.beginPath();
+  ctx.roundRect(-w / 2, 0, w, 60, 18);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(255,197,85,0.55)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  const g = ctx.createLinearGradient(0, 14, 0, 46);
+  g.addColorStop(0, "#fff0b3");
+  g.addColorStop(1, "#ffb42e");
+  ctx.fillStyle = g;
+  star(-w / 2 + 34, 30, 17);
+  ctx.fill();
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = COLORS.combo;
+  ctx.font = `800 11px ${FONT}`;
+  ctx.fillText("BADGE UNLOCKED", -w / 2 + 62, 17);
+  ctx.fillStyle = COLORS.text;
+  ctx.font = `700 16px ${FONT}`;
+  ctx.fillText(t.title, -w / 2 + 62, 35);
+  ctx.fillStyle = COLORS.dim;
+  ctx.font = `500 12px ${FONT}`;
+  ctx.fillText(t.desc, -w / 2 + 62, 51, w - 76);
+  ctx.restore();
+}
+
+// ---- Stats screen ------------------------------------------------------------------
+
+/** Card is laid out in a 600-unit-tall box and scaled down to fit short screens. */
+function statsLayout(): { k: number; cw: number } {
+  return { k: Math.min(1, (H - 24) / 600), cw: Math.min((W - 24) / Math.min(1, (H - 24) / 600), 360) };
+}
+function badgeCell(i: number, l: { cw: number }): { x: number; y: number; w: number } {
+  const w = (l.cw - 32) / 4;
+  return { x: -l.cw / 2 + 16 + w * (i % 4) + w / 2, y: -50 + Math.floor(i / 4) * 62, w };
+}
+
+function drawStats(): void {
+  const l = statsLayout();
+  const e = 1 - Math.pow(1 - statsT, 3);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = `rgba(7,9,14,${0.86 * e})`;
+  ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  ctx.globalAlpha = e;
+  ctx.translate(W / 2, H / 2 + (1 - e) * 24);
+  ctx.scale(l.k, l.k);
+  const cw = l.cw;
+  const card = ctx.createLinearGradient(0, -300, 0, 300);
+  card.addColorStop(0, "#222840");
+  card.addColorStop(1, "#151a2a");
+  ctx.shadowColor = "rgba(0,0,0,0.6)";
+  ctx.shadowBlur = 40;
+  ctx.fillStyle = card;
+  ctx.beginPath();
+  ctx.roundRect(-cw / 2, -300, cw, 600, 26);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(255,255,255,0.09)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+  ctx.fillStyle = COLORS.text;
+  ctx.font = `800 24px ${FONT}`;
+  ctx.fillText("Your stats", 0, -268);
+
+  const avg = stats.finished ? Math.round(stats.total / stats.finished) : 0;
+  const tiles: [string, string][] = [
+    ["Games", stats.games.toLocaleString()], ["Best score", stats.bestScore.toLocaleString()], ["Average", avg.toLocaleString()],
+    ["Best combo", `${stats.bestCombo}x`], ["Lines cleared", stats.lines.toLocaleString()], ["Daily streak", `${streakNow()} (best ${stats.bestStreak})`],
+  ];
+  const tw = (cw - 48 - 20) / 3;
+  tiles.forEach(([name, value], i) => {
+    const x = -cw / 2 + 24 + (i % 3) * (tw + 10);
+    const y = -235 + Math.floor(i / 3) * 74;
+    ctx.fillStyle = "rgba(255,255,255,0.05)";
+    ctx.beginPath();
+    ctx.roundRect(x, y, tw, 64, 14);
+    ctx.fill();
+    ctx.fillStyle = COLORS.text;
+    ctx.font = `800 ${value.length > 9 ? 13 : 20}px ${FONT}`;
+    ctx.fillText(value, x + tw / 2, y + 26, tw - 8);
+    ctx.fillStyle = COLORS.dim;
+    ctx.font = `600 11px ${FONT}`;
+    ctx.fillText(name, x + tw / 2, y + 47, tw - 8);
+  });
+
+  ctx.textAlign = "left";
+  ctx.fillStyle = COLORS.text;
+  ctx.font = `800 15px ${FONT}`;
+  ctx.fillText("Badges", -cw / 2 + 24, -70);
+  ctx.textAlign = "right";
+  ctx.fillStyle = COLORS.dim;
+  ctx.font = `700 13px ${FONT}`;
+  ctx.fillText(`${unlocked.length} / ${BADGES.length}`, cw / 2 - 24, -70);
+
+  ctx.textAlign = "center";
+  BADGES.forEach((b, i) => {
+    const c = badgeCell(i, l);
+    const got = unlocked.includes(b.id);
+    if (badgeSel === i) {
+      ctx.fillStyle = "rgba(255,255,255,0.07)";
+      ctx.beginPath();
+      ctx.roundRect(c.x - c.w / 2 + 2, c.y - 4, c.w - 4, 62, 12);
+      ctx.fill();
+    }
+    if (got) {
+      const g = ctx.createLinearGradient(0, c.y, 0, c.y + 34);
+      g.addColorStop(0, "#fff0b3");
+      g.addColorStop(1, "#ffb42e");
+      ctx.fillStyle = g;
+      ctx.shadowColor = "rgba(255,180,46,0.6)";
+      ctx.shadowBlur = 12;
+      star(c.x, c.y + 18, 17);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    } else {
+      ctx.strokeStyle = "rgba(255,255,255,0.2)";
+      ctx.lineWidth = 1.5;
+      star(c.x, c.y + 18, 16);
+      ctx.stroke();
+    }
+    ctx.fillStyle = got ? COLORS.text : "#586079";
+    ctx.font = `600 11px ${FONT}`;
+    ctx.fillText(b.name, c.x, c.y + 48, c.w - 4);
+  });
+
+  ctx.fillStyle = COLORS.dim;
+  ctx.font = `500 13px ${FONT}`;
+  const sel = badgeSel >= 0 ? BADGES[badgeSel] : undefined;
+  ctx.fillText(sel ? `${sel.name}: ${sel.desc}` : "Tap a badge to see how to earn it.", 0, 222, cw - 40);
+
+  const bg = ctx.createLinearGradient(0, 244, 0, 290);
+  bg.addColorStop(0, "#6cb4ff");
+  bg.addColorStop(1, "#3a82e6");
+  ctx.fillStyle = bg;
+  ctx.beginPath();
+  ctx.roundRect(-84, 246, 168, 44, 22);
+  ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.font = `700 16px ${FONT}`;
+  ctx.textAlign = "center";
+  ctx.fillText("Close", 0, 269);
   ctx.restore();
 }
 

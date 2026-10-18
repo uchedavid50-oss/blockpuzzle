@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SIZE, canPlace, canPlaceAnywhere, emptyGrid, hasMoves, place, type Grid, type Shape } from "./board";
+import { PERFECT_BONUS, isEmpty, SIZE, canPlace, canPlaceAnywhere, emptyGrid, hasMoves, place, type Grid, type Shape } from "./board";
 
 const dot: Shape = [[0, 0]];
 const h = (n: number): Shape => Array.from({ length: n }, (_, i) => [0, i] as const);
@@ -101,3 +101,22 @@ describe("combo scoring", () => {
   });
 });
 
+
+describe("perfect clear", () => {
+  it("isEmpty is true only for a blank board", () => {
+    expect(isEmpty(emptyGrid())).toBe(true);
+    expect(isEmpty(filled([[4, 4]]))).toBe(false);
+  });
+  it("clearing the last blocks leaves an empty board", () => {
+    const g = filled(Array.from({ length: 7 }, (_, c) => [2, c] as [number, number]));
+    const res = place(g, dot, 2, 7);
+    expect(res.rowsCleared).toEqual([2]);
+    expect(isEmpty(res.grid)).toBe(true);
+  });
+  it("a clear that leaves other blocks behind is not perfect", () => {
+    const cells = Array.from({ length: 7 }, (_, c) => [2, c] as [number, number]);
+    cells.push([5, 5]);
+    expect(isEmpty(place(filled(cells), dot, 2, 7).grid)).toBe(false);
+  });
+  it("the bonus is a positive constant", () => expect(PERFECT_BONUS).toBeGreaterThan(0));
+});
