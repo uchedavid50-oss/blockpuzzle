@@ -409,25 +409,39 @@ function block(x: number, y: number, s: number, hex: string): void {
   const g = Math.max(1, s * 0.04);
   const w = s - g * 2;
   const rr = s * 0.22;
-  const grad = ctx.createLinearGradient(x, y, x, y + s);
-  grad.addColorStop(0, mix(hex, 255, 0.32));
-  grad.addColorStop(0.55, hex);
-  grad.addColorStop(1, mix(hex, 0, 0.3));
+  const dep = s * 0.11; // visible thickness: the block is a slab, lit from above
+  const fh = w - dep; // height of the top face
+
+  // Side wall: a darker copy sitting lower, so the face reads as raised.
+  ctx.fillStyle = mix(hex, 0, 0.5);
+  ctx.beginPath();
+  ctx.roundRect(x + g, y + g + dep, w, fh, rr);
+  ctx.fill();
+  ctx.fillStyle = "rgba(0,0,0,0.18)"; // contact shade at the base
+  ctx.beginPath();
+  ctx.roundRect(x + g, y + g + dep + fh * 0.7, w, fh * 0.3, rr);
+  ctx.fill();
+
+  // Top face.
+  const grad = ctx.createLinearGradient(x, y + g, x, y + g + fh);
+  grad.addColorStop(0, mix(hex, 255, 0.36));
+  grad.addColorStop(0.5, hex);
+  grad.addColorStop(1, mix(hex, 0, 0.14));
   ctx.fillStyle = grad;
   ctx.beginPath();
-  ctx.roundRect(x + g, y + g, w, w, rr);
+  ctx.roundRect(x + g, y + g, w, fh, rr);
   ctx.fill();
-  // top gloss
-  ctx.fillStyle = "rgba(255,255,255,0.16)";
+  // bevel highlight along the top edge
+  ctx.strokeStyle = "rgba(255,255,255,0.38)";
+  ctx.lineWidth = 1.2;
   ctx.beginPath();
-  ctx.roundRect(x + g + w * 0.08, y + g + w * 0.06, w * 0.84, w * 0.38, rr * 0.8);
-  ctx.fill();
-  // rim
-  ctx.strokeStyle = "rgba(255,255,255,0.22)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.roundRect(x + g + 0.5, y + g + 0.5, w - 1, w - 1, rr);
+  ctx.roundRect(x + g + 0.6, y + g + 0.6, w - 1.2, fh - 1.2, rr);
   ctx.stroke();
+  // soft gloss
+  ctx.fillStyle = "rgba(255,255,255,0.15)";
+  ctx.beginPath();
+  ctx.roundRect(x + g + w * 0.1, y + g + fh * 0.08, w * 0.8, fh * 0.36, rr * 0.8);
+  ctx.fill();
 }
 
 function emptyCell(x: number, y: number, s: number): void {
@@ -439,6 +453,11 @@ function emptyCell(x: number, y: number, s: number): void {
   ctx.beginPath();
   ctx.roundRect(x + g, y + g, s - g * 2, s - g * 2, s * 0.22);
   ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.045)"; // lit lower lip
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(x + g + 0.5, y + g + 1.5, s - g * 2 - 1, s - g * 2 - 1, s * 0.22);
+  ctx.stroke();
 }
 
 function drawShape(shape: Shape, x: number, y: number, s: number, hex: string): void {
@@ -544,6 +563,11 @@ function drawControls(): void {
 
 function drawBoard(): void {
   const bw = cell * SIZE;
+  // Slab edge: a darker panel just below, so the board has thickness.
+  ctx.fillStyle = "#0b0d14";
+  ctx.beginPath();
+  ctx.roundRect(boardX - 10, boardY - 10 + 9, bw + 20, bw + 20, 20);
+  ctx.fill();
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.55)";
   ctx.shadowBlur = 36;
