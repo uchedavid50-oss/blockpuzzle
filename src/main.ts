@@ -1,6 +1,12 @@
-import { PERFECT_BONUS, SIZE, canPlace, canPlaceAnywhere, emptyGrid, hasMoves, isEmpty, place, shapeSize, type Grid, type Shape } from "./board";
+import { PERFECT_BONUS, REGION_COUNT, REGION_H, REGION_W, SIZE, canPlace, canPlaceAnywhere, clearCells, clearedCells, emptyGrid, fullestLine, hasMoves, isEmpty, place, regionCells, regionOf, shapeSize, type Grid, type Shape } from "./board";
 import { drawTray, shapeAt, shapeIndex } from "./pieces";
 import { challengeUrl, parseChallenge, randomSeed, type Challenge } from "./challenge";
+import { goalReached, goalText, goalValue, makeLevel, starsFor } from "./journey";
+import { BUCKET_LABELS, scoreBucket, timeUntilMidnight } from "./meta";
+import { seeded } from "./rng";
+import { boardEmoji, shareText } from "./share";
+import { addDays, applyPlay, currentStreak, freezeAvailable, weekId, type StreakRec } from "./streak";
+import { blankRun, recordMove, weeklyDone, weeklyFailed, weeklyFor, weeklySeed, weeklyValue, type WeeklyRun } from "./weekly";
 import { haptic, haptics } from "./haptics";
 import { isMuted, sfx, soundState, toggleMute, unlock } from "./sound";
 
@@ -19,7 +25,19 @@ interface State {
   seed: string; // fixes the piece sequence; the date for a daily, otherwise random or from a challenge link
   challenge: number | null; // target score when playing a friend's challenge
   trays: number; // trays dealt so far; with the date it fixes the daily sequence
+  kind: Kind;
+  practice: boolean; // a daily replay or archive run: it never touches the streak or the official result
+  level: number | null; // journey level
+  week: string | null; // weekly challenge id (the Monday's date)
+  wk: WeeklyRun | null;
+  moves: number; // pieces placed this game
+  lines: number; // lines cleared this game
+  won: boolean; // journey level cleared
+  stars: number;
 }
+
+type Kind = "classic" | "zen" | "weekly" | "journey";
+interface GameOpts { daily?: string | null; ch?: Challenge | null; kind?: Kind; level?: number }
 
 const BEST_KEY = "blockpuzzle.best";
 const SAVE_KEY = "blockpuzzle.save";
@@ -34,21 +52,18 @@ function dateStr(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 const today = (): string => dateStr(new Date());
-const yesterday = (): string => {
-  const d = new Date();
-  return dateStr(new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1));
-};
 
 // ---- Lifetime stats and milestone badges (device-local) -------------------------
 
 interface Stats {
   games: number; finished: number; total: number; bestScore: number; bestCombo: number;
   lines: number; perfects: number; moves: number; bestStreak: number; challengesWon: number;
+  zenLines: number; levels: number; weeklyWins: number; hist: number[];
 }
 const STATS_KEY = "blockpuzzle.stats";
 const BADGES_KEY = "blockpuzzle.badges";
 const SEEN_KEY = "blockpuzzle.badgesSeen";
-const blankStats = (): Stats => ({ games: 0, finished: 0, total: 0, bestScore: 0, bestCombo: 0, lines: 0, perfects: 0, moves: 0, bestStreak: 0, challengesWon: 0 });
+const blankStats = (): Stats => ({ games: 0, finished: 0, total: 0, bestScore: 0, bestCombo: 0, lines: 0, perfects: 0, moves: 0, bestStreak: 0, challengesWon: 0, zenLines: 0, levels: 0, weeklyWins: 0, hist: [0, 0, 0, 0, 0, 0] });
 const stats: Stats = (() => {
   try {
     const d = JSON.parse(localStorage.getItem(STATS_KEY) ?? "null") as Partial<Stats> | null;
@@ -67,7 +82,7 @@ const unlocked: string[] = (() => {
 })();
 let badgesSeen = (() => { try { return Number(localStorage.getItem(SEEN_KEY)) || 0; } catch { return 0; } })();
 
-interface MoveInfo { lines: number; combo: number; perfect: boolean }
+interface MoveInfo { lines: number; combo: number; perfect: boolean; regions: number }
 interface Badge {
   id: string; name: string; desc: string; ok: (m: MoveInfo | null) => boolean;
   progress?: () => [number, number]; // [now, target], shown as a bar while locked
@@ -91,28 +106,52 @@ const BADGES: Badge[] = [
   { id: "streak3", name: "Regular", desc: "Play the daily 3 days in a row.", ok: () => stats.bestStreak >= 3, progress: () => [stats.bestStreak, 3] },
   { id: "streak7", name: "Devoted", desc: "Play the daily 7 days in a row.", ok: () => stats.bestStreak >= 7, progress: () => [stats.bestStreak, 7], reward: "Aurora theme" },
   { id: "streak30", name: "Marathon", desc: "Play the daily 30 days in a row.", ok: () => stats.bestStreak >= 30, progress: () => [stats.bestStreak, 30] },
+  { id: "region", name: "Squared away", desc: "Clear a 2\u00D74 block.", ok: (m) => !!m && m.regions >= 1 },
+  { id: "weekly1", name: "Challenger", desc: "Complete a weekly challenge.", ok: () => stats.weeklyWins >= 1 },
+  { id: "journey5", name: "Explorer", desc: "Clear 5 journey levels.", ok: () => stats.levels >= 5, progress: () => [stats.levels, 5] },
+  { id: "zen50", name: "Calm mind", desc: "Clear 50 lines in zen mode.", ok: () => stats.zenLines >= 50, progress: () => [stats.zenLines, 50] },
   { id: "rival", name: "Rival", desc: "Beat a friend's challenge score.", ok: () => stats.challengesWon >= 1 },
   { id: "perfect", name: "Spotless", desc: "Clear the entire board.", ok: () => stats.perfects >= 1, reward: "Midnight theme" },
 ];
 
 const has = (id: string): boolean => unlocked.includes(id);
+
+// The collection: a 4x4 picture that fills in as you play. Every 40 lines, 5 journey levels or
+// a weekly win reveals a tile (a win is worth two); completing it unlocks the Prism theme.
+const COLLECTION_SIZE = 16;
+const TILE_ORDER = [5, 10, 0, 15, 6, 9, 3, 12, 1, 14, 2, 13, 4, 11, 7, 8];
+const collectionTiles = (): number =>
+  Math.min(COLLECTION_SIZE, Math.floor(stats.lines / 40) + Math.floor(stats.levels / 5) + stats.weeklyWins * 2);
+const TILES_KEY = "blockpuzzle.tilesSeen";
+function checkCollection(): void {
+  const now = collectionTiles();
+  let seen = 0;
+  try { seen = Number(localStorage.getItem(TILES_KEY)) || 0; } catch { /* ignore */ }
+  if (now <= seen) return;
+  try { localStorage.setItem(TILES_KEY, String(now)); } catch { /* ignore */ }
+  toasts.push(now >= COLLECTION_SIZE
+    ? { title: "Collection complete", desc: "Unlocked: Prism theme", t: 0, label: "COLLECTION" }
+    : { title: "New collection tile", desc: `${now} of ${COLLECTION_SIZE} revealed`, t: 0, label: "COLLECTION" });
+  sfx.praise(1);
+}
 /** Every 5 badges earns one extra undo at the start of each random (non-daily) game, up to +2. */
 const perkUndos = (): number => Math.min(2, Math.floor(unlocked.length / 5));
 const RANKS: [number, string][] = [[0, "Rookie"], [1, "Beginner"], [3, "Player"], [6, "Skilled"], [9, "Expert"], [12, "Master"], [16, "Grandmaster"]];
 const rankName = (): string => [...RANKS].reverse().find(([n]) => unlocked.length >= n)![1];
 
-interface Toast { title: string; desc: string; t: number }
+interface Toast { title: string; desc: string; t: number; label?: string }
 let toasts: Toast[] = [];
 
 /** Unlocks any badge whose condition now holds and queues a pop-up for each. */
 function checkBadges(m: MoveInfo | null): void {
+  checkCollection();
   let any = false;
   for (const b of BADGES) {
     if (unlocked.includes(b.id) || !b.ok(m)) continue;
     const before = perkUndos();
     unlocked.push(b.id);
     toasts.push({ title: b.name, desc: b.reward ? `Unlocked: ${b.reward}` : b.desc, t: 0 });
-    if (perkUndos() > before) toasts.push({ title: "Extra undo earned", desc: "Random games now start with more undos.", t: 0 });
+    if (perkUndos() > before) toasts.push({ title: "Extra undo earned", desc: "Random games now start with more undos.", t: 0, label: "PERK EARNED" });
     any = true;
   }
   if (!any) return;
@@ -122,40 +161,27 @@ function checkBadges(m: MoveInfo | null): void {
 }
 
 // Consecutive days on which a daily game was started. Device-local; no backend.
+// One missed day is bridged by a weekly freeze (see streak.ts).
 const STREAK_KEY = "blockpuzzle.streak";
-function readStreak(): { last: string; n: number } | null {
+function readStreak(): StreakRec | null {
   try {
-    const d = JSON.parse(localStorage.getItem(STREAK_KEY) ?? "null") as { last?: string; n?: number } | null;
-    return d && typeof d.last === "string" && typeof d.n === "number" ? { last: d.last, n: d.n } : null;
+    const d = JSON.parse(localStorage.getItem(STREAK_KEY) ?? "null") as Partial<StreakRec> | null;
+    return d && typeof d.last === "string" && typeof d.n === "number"
+      ? { last: d.last, n: d.n, ...(typeof d.freezeWeek === "string" ? { freezeWeek: d.freezeWeek } : {}) } : null;
   } catch { return null; }
 }
-function streakNow(): number {
-  const s = readStreak();
-  return s && (s.last === today() || s.last === yesterday()) ? s.n : 0;
-}
+const streakNow = (): number => currentStreak(readStreak(), today());
 function bumpStreak(): void {
-  const s = readStreak();
-  if (s?.last === today()) return;
-  const n = s?.last === yesterday() ? s.n + 1 : 1;
-  try { localStorage.setItem(STREAK_KEY, JSON.stringify({ last: today(), n })); } catch { /* ignore */ }
-  stats.bestStreak = Math.max(stats.bestStreak, n);
+  const before = readStreak();
+  const { rec, saved } = applyPlay(before, today());
+  if (rec === before) return;
+  try { localStorage.setItem(STREAK_KEY, JSON.stringify(rec)); } catch { /* ignore */ }
+  stats.bestStreak = Math.max(stats.bestStreak, rec.n);
   saveStats();
+  if (saved) toasts.push({ title: "Streak saved", desc: "Your weekly freeze covered the day you missed.", t: 0, label: "STREAK FREEZE" });
   checkBadges(null);
 }
 const playedDailyToday = (): boolean => readStreak()?.last === today();
-
-/** Seeded generator (mulberry32 over an FNV-1a hash), so a date gives everyone the same trays. */
-function seeded(seed: string): () => number {
-  let h = 2166136261;
-  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619);
-  let a = h >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 /** Tray number n for the given mode. Each daily tray has its own stream, so retries cannot shift later trays. */
 const makeTray = (grid: Grid, seed: string, n: number): Shape[] => drawTray(grid, seeded(`${seed}:${n}`));
@@ -168,6 +194,7 @@ const THEMES: { name: string; colors: string[]; req?: string }[] = [
   // Okabe-Ito: chosen to stay distinguishable with the common kinds of colour blindness.
   { name: "Gold", req: "s1000", colors: ["#ffd75e", "#ff9f43", "#f6c177", "#e8b4a0", "#c9a227", "#ffe9a0", "#d4884a", "#b8860b"] },
   { name: "Aurora", req: "streak7", colors: ["#3ef5c0", "#4ad1ff", "#7c6bff", "#c45bff", "#ff6bd6", "#57ffa0", "#39b3ff", "#a2ff5e"] },
+  { name: "Prism", req: "collection", colors: ["#ff4d6d", "#ff9f1c", "#ffe14d", "#5ce65c", "#2ec4b6", "#4d8cff", "#9b5cff", "#ff5cc8"] },
   { name: "Midnight", req: "perfect", colors: ["#5b7cff", "#8a5bff", "#2ec8ff", "#ff4fa3", "#31e6c1", "#ffd34f", "#7aa2ff", "#c06bff"] },
   { name: "Colour-blind", colors: ["#0072b2", "#e69f00", "#56b4e9", "#009e73", "#f0e442", "#d55e00", "#cc79a7", "#999999"] },
 ];
@@ -175,7 +202,10 @@ const THEME_KEY = "blockpuzzle.theme";
 const PALETTE: string[] = [...THEMES[0]!.colors]; // mutated in place when the theme changes
 let themeIdx = 0;
 let themeShownAt = -10;
-const themeUnlocked = (i: number): boolean => !THEMES[i]!.req || has(THEMES[i]!.req!);
+const themeUnlocked = (i: number): boolean => {
+  const req = THEMES[i]!.req;
+  return !req || (req === "collection" ? collectionTiles() >= COLLECTION_SIZE : has(req));
+};
 /** Next theme you have unlocked, wrapping around. */
 function cycleTheme(): void {
   for (let k = 1; k <= THEMES.length; k++) {
@@ -202,17 +232,65 @@ let colorGrid = blankColors();
 let pop = blankPop();
 let startBest = loadBest();
 
-function newState(daily: string | null = null, ch: Challenge | null = null): State {
+function newState(o: GameOpts = {}): State {
+  const daily = o.daily ?? null;
+  const kind: Kind = o.kind ?? "classic";
   colorGrid = blankColors();
   pop = blankPop();
   startBest = loadBest(daily);
-  const grid = emptyGrid();
-  const seed = daily ?? ch?.seed ?? randomSeed();
+  let grid: Grid = emptyGrid();
+  let seed = daily ?? o.ch?.seed ?? "";
+  let level: number | null = null;
+  let week: string | null = null;
+  if (kind === "journey") {
+    level = Math.max(1, Math.floor(o.level ?? 1));
+    const lv = makeLevel(level);
+    grid = lv.prefill;
+    seed = lv.seed;
+    colorGrid = grid.map((row, r) => row.map((f, c) => (f ? (r + c * 2) % PALETTE.length : -1)));
+  } else if (kind === "weekly") {
+    week = weekId(today());
+    seed = weeklySeed(week);
+  }
+  if (!seed) seed = randomSeed();
+  // A daily replay (or an archive day you already played) is practice: the first attempt is the record.
+  const practice = !!daily && officialResult(daily) !== null;
+  const undoLeft = kind === "zen" ? 99 : daily || o.ch || kind !== "classic" ? 1 : 1 + perkUndos();
   return {
     grid, tray: makeTray(grid, seed, 0), score: 0, best: loadBest(daily), combo: 0, over: false, daily, trays: 1,
-    undoLeft: daily || ch ? 1 : 1 + perkUndos(), seed, challenge: ch ? ch.target : null,
+    undoLeft, seed, challenge: o.ch ? o.ch.target : null, kind, practice, level, week,
+    wk: kind === "weekly" ? blankRun() : null, moves: 0, lines: 0, won: false, stars: 0,
   };
 }
+
+// ---- The daily's official result and par ----------------------------------------
+// The first attempt at a given day is the record, and the only one that is shared as the result.
+// Later attempts at that date are practice.
+
+interface Official { score: number; board: string; abandoned?: boolean }
+const officialKey = (date: string): string => `blockpuzzle.official.${date}`;
+function officialResult(date: string): Official | null {
+  try {
+    const d = JSON.parse(localStorage.getItem(officialKey(date)) ?? "null") as Official | null;
+    return d && typeof d.score === "number" && typeof d.board === "string" ? d : null;
+  } catch { return null; }
+}
+function recordOfficial(abandoned: boolean): void {
+  if (!state.daily || state.practice || officialResult(state.daily)) return;
+  try {
+    localStorage.setItem(officialKey(state.daily), JSON.stringify({ score: state.score, board: boardEmoji(state.grid, colorGrid), ...(abandoned ? { abandoned: true } : {}) }));
+  } catch { /* ignore */ }
+}
+function clearOfficial(date: string): void {
+  try { localStorage.removeItem(officialKey(date)); } catch { /* ignore */ }
+}
+
+/** Par for each date, from a greedy bot run offline (scripts/make-par.ts). Missing days just show no par. */
+let parMap: Record<string, number> = {};
+fetch("/par.json").then((r) => (r.ok ? r.json() : null)).then((d: unknown) => {
+  if (d && typeof d === "object") parMap = d as Record<string, number>;
+}).catch(() => { /* offline or missing: no par */ });
+const parFor = (date: string | null): number | null => (date && parMap[date] ? parMap[date]! : null);
 
 // ---- Saving a game in progress ------------------------------------------------
 // Shapes are stored as catalogue indices; the grid as one 64-char string of 0/1.
@@ -230,6 +308,13 @@ function save(): void {
       ch: state.challenge,
       n: state.trays,
       u: state.undoLeft,
+      kd: state.kind,
+      pr: state.practice,
+      lv: state.level,
+      wid: state.week,
+      wk: state.wk,
+      mv: state.moves,
+      ln: state.lines,
       k: colorGrid.flat().map((v) => (v < 0 ? "-" : String(v))).join(""),
     }));
   } catch { /* ignore */ }
@@ -239,7 +324,7 @@ function load(): State | null {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
-    const d = JSON.parse(raw) as { g: string; t: number[]; s: number; c: number; k?: string; d?: string | null; n?: number; u?: number; sd?: string; ch?: number | null };
+    const d = JSON.parse(raw) as { g: string; t: number[]; s: number; c: number; k?: string; d?: string | null; n?: number; u?: number; sd?: string; ch?: number | null; kd?: Kind; pr?: boolean; lv?: number | null; wid?: string | null; wk?: WeeklyRun | null; mv?: number; ln?: number };
     if (typeof d?.g !== "string" || d.g.length !== SIZE * SIZE || !Array.isArray(d.t)) return null;
     const grid = Array.from({ length: SIZE }, (_, r) =>
       Array.from({ length: SIZE }, (_, c) => d.g[r * SIZE + c] === "1"));
@@ -256,9 +341,15 @@ function load(): State | null {
     startBest = loadBest(daily);
     return {
       grid, tray, score: Number(d.s) || 0, best: loadBest(daily), combo: Number(d.c) || 0, over: false,
-      daily, trays: Number(d.n) || 1, undoLeft: d.u === 0 ? 0 : 1,
+      daily, trays: Number(d.n) || 1, undoLeft: Number.isFinite(d.u) ? Math.max(0, Math.min(99, Number(d.u))) : 1,
       seed: typeof d.sd === "string" && /^[a-z0-9-]{3,24}$/i.test(d.sd) ? d.sd : daily ?? randomSeed(),
       challenge: typeof d.ch === "number" ? d.ch : null,
+      kind: d.kd === "zen" || d.kd === "weekly" || d.kd === "journey" ? d.kd : "classic",
+      practice: d.pr === true,
+      level: typeof d.lv === "number" ? d.lv : null,
+      week: typeof d.wid === "string" ? d.wid : null,
+      wk: d.wk && typeof d.wk.lines === "number" ? { ...blankRun(), ...d.wk } : null,
+      moves: Number(d.mv) || 0, lines: Number(d.ln) || 0, won: false, stars: 0,
     };
   } catch {
     return null;
@@ -296,12 +387,16 @@ let chT = 0;
 const chHit = (x: number, y: number): "play" | "skip" | null =>
   Math.abs(x - W / 2) <= 100 && y >= H / 2 + 66 && y <= H / 2 + 126 ? "play"
   : Math.abs(x - W / 2) <= 100 && y >= H / 2 + 132 && y <= H / 2 + 176 ? "skip" : null;
+let modesOn = false;
+let modesView: "main" | "archive" = "main";
+let modesT = 0;
+let modesPress: { x: number; y: number } | null = null;
 let statsOn = false;
 let statsT = 0;
 let statsPress: { x: number; y: number } | null = null;
 let badgeSel = -1;
 let gameCounted = state.score > 0; // this game has been added to the games-played count
-let banked = 0; // final score already added to the lifetime total
+let banked: number | null = null; // final score already added to the lifetime total (null = not yet)
 let scorePulse = 0;
 let clears: Clear[] = [];
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; size: number; color: string; g?: number; spark?: boolean; star?: boolean; rot?: number; vr?: number }
@@ -350,18 +445,24 @@ const THEME_C = (): [number, number] => [W - 58, 77];
 const MUTE_R = 14;
 const muteCenter = (): [number, number] => [W - 26, 77];
 
-interface Snapshot { grid: Grid; tray: (Shape | null)[]; score: number; combo: number; trays: number; colors: number[][] }
+interface Snapshot { grid: Grid; tray: (Shape | null)[]; score: number; combo: number; trays: number; colors: number[][]; moves: number; lines: number; wk: WeeklyRun | null }
 let snap: Snapshot | null = null;
 
 const canUndo = (): boolean => !!snap && state.undoLeft > 0 && !state.over && !drag;
-const canUndoOver = (): boolean => !!snap && state.undoLeft > 0 && state.over;
+const canUndoOver = (): boolean => !!snap && state.undoLeft > 0 && state.over && !state.won;
 
 function undo(): void {
   if (!snap || state.undoLeft <= 0 || drag) return;
   if (state.over) {
     // Take back the losing move, and the stats it banked.
     state.over = false; overT = 0;
-    stats.total -= banked; stats.finished = Math.max(0, stats.finished - 1); banked = 0;
+    if (banked !== null) {
+      stats.total -= banked; stats.finished = Math.max(0, stats.finished - 1);
+      stats.hist[scoreBucket(banked)] = Math.max(0, (stats.hist[scoreBucket(banked)] ?? 0) - 1);
+      banked = null;
+    }
+    if (state.daily && !state.practice) clearOfficial(state.daily);
+    if (state.won) { state.won = false; }
     saveStats();
   }
   state.grid = snap.grid;
@@ -369,6 +470,9 @@ function undo(): void {
   state.score = snap.score;
   state.combo = snap.combo;
   state.trays = snap.trays;
+  state.moves = snap.moves;
+  state.lines = snap.lines;
+  state.wk = snap.wk && state.wk ? { ...snap.wk, undos: state.wk.undos + 1 } : snap.wk;
   state.undoLeft--;
   colorGrid = snap.colors;
   pop = blankPop();
@@ -380,9 +484,10 @@ function undo(): void {
   save();
 }
 
-function startDaily(target: string | null): void {
-  if (state.score > 0 && !state.over && !confirm("Start a new game? Your current game will be lost.")) return;
-  reset(target);
+/** Starts a game, asking first if it would throw away one in progress. */
+function startGame(o: GameOpts): void {
+  if (state.score > 0 && !state.over && state.kind !== "zen" && !confirm("Start a new game? Your current game will be lost.")) return;
+  reset(o);
 }
 
 let moves = 0; // placements this session, to time the install nudge
@@ -403,36 +508,159 @@ function overHit(x: number, y: number): "share" | "again" | "mode" | "undo" {
   return "again";
 }
 
-async function shareScore(): Promise<void> {
-  const text = state.daily
-    ? `Block Puzzle daily ${state.daily}: I scored ${state.score}. Can you beat it?`
-    : `I scored ${state.score} in Block Puzzle. Beat me on the exact same pieces!`;
+/** The text and link to share for this game: a small emoji picture of the board, not just a number. */
+function shareContent(): { text: string; url: string } {
+  const origin = location.origin;
+  if (state.kind === "journey" && state.level)
+    return { text: `Block Puzzle \u00B7 Level ${state.level} ${state.won ? "\u2605".repeat(state.stars) : "(not cleared yet)"}\nCan you clear it?`, url: origin };
+  if (state.kind === "zen") return { text: `Block Puzzle zen: ${state.lines} lines cleared, no game over.`, url: origin };
+  if (state.daily) {
+    // The official first attempt is the result that gets shared, even after a practice run.
+    const off = officialResult(state.daily);
+    const board = off ? off.board : boardEmoji(state.grid, colorGrid);
+    const score = off ? off.score : state.score;
+    return {
+      text: shareText({
+        title: `Block Puzzle \u00B7 ${state.daily}`, score, board, par: parFor(state.daily),
+        streak: state.daily === today() ? streakNow() : 0, note: state.daily === today() ? undefined : "Archive",
+      }),
+      url: origin,
+    };
+  }
+  const title = state.kind === "weekly" && state.week ? `Block Puzzle \u00B7 Weekly ${state.week}` : "Block Puzzle";
+  const text = shareText({ title, score: state.score, board: boardEmoji(state.grid, colorGrid) }) + "\nBeat me on the exact same pieces!";
   // A random game's link carries its seed, so a friend plays the same pieces against my score.
-  const url = state.daily ? location.origin : challengeUrl(location.origin, state.seed, state.score);
+  return { text, url: state.kind === "weekly" ? origin : challengeUrl(origin, state.seed, state.score) };
+}
+
+async function shareScore(): Promise<void> {
+  const { text, url } = shareContent();
   try {
     if (navigator.share) {
       await navigator.share({ text, url });
     } else {
-      await navigator.clipboard.writeText(`${text} ${url}`);
+      await navigator.clipboard.writeText(`${text}\n${url}`);
       sharedAt = clock;
     }
   } catch (err) {
     // A cancelled share sheet is not an error; anything else falls back to copying.
     if ((err as DOMException)?.name === "AbortError") return;
-    try { await navigator.clipboard.writeText(`${text} ${url}`); sharedAt = clock; } catch { /* ignore */ }
+    try { await navigator.clipboard.writeText(`${text}\n${url}`); sharedAt = clock; } catch { /* ignore */ }
   }
 }
 
-function reset(daily: string | null = null, ch: Challenge | null = null): void {
-  state = newState(daily, ch);
-  challengeBeaten = false;
+function reset(o: GameOpts = {}): void {
+  // Walking away from today's first attempt closes it with the score so far: no retrying until it looks good.
+  if (state.daily && !state.practice && !state.over && state.score > 0) recordOfficial(true);
+  state = newState(o);
   snap = null;
   gameCounted = false;
-  banked = 0;
+  banked = null;
+  challengeBeaten = false;
   shownScore = 0;
   clears = []; particles = []; floaters = []; returning = []; rings = []; praises = []; flash = 0;
   overT = 0;
   save();
+}
+
+/** Weekly and journey bookkeeping after each placement. */
+function trackModes(m: { lines: number; cells: number; points: number }): void {
+  if (state.kind === "weekly" && state.wk && state.week) {
+    const w = weeklyFor(state.week);
+    const wasFailed = weeklyFailed(w, state.wk);
+    state.wk = recordMove(state.wk, m);
+    if (!wasFailed && weeklyFailed(w, state.wk)) {
+      praises.push({ text: "Rule broken", t: 0, level: 1 });
+      haptics.invalid();
+    }
+    if (weeklyDone(w, state.wk) && !weeklyCompleted(state.week)) {
+      try { localStorage.setItem(`blockpuzzle.weekly.${state.week}`, "1"); } catch { /* ignore */ }
+      stats.weeklyWins++;
+      saveStats();
+      praises.push({ text: "Complete!", t: 0, level: 5 });
+      sfx.praise(5);
+      flash = Math.max(flash, 0.4);
+      haptic([30, 40, 30, 40, 90]);
+      checkBadges(null);
+    }
+  }
+  if (state.kind === "journey" && state.level && !state.won) {
+    const lv = makeLevel(state.level);
+    const prog = { score: state.score, lines: state.lines, moves: state.moves };
+    if (goalReached(lv, prog)) {
+      state.won = true;
+      state.over = true;
+      overT = 0;
+      state.stars = starsFor(lv, prog);
+      const j = readJourney();
+      j.stars[state.level] = Math.max(j.stars[state.level] ?? 0, state.stars);
+      if (state.level >= j.next) { j.next = state.level + 1; }
+      writeJourney(j);
+      stats.levels = Object.keys(j.stars).length;
+      saveStats();
+      sfx.praise(6);
+      flash = 0.5;
+      haptic([30, 30, 30, 30, 30, 30, 70]);
+      checkBadges(null);
+    }
+  }
+}
+
+const weeklyCompleted = (week: string): boolean => {
+  try { return localStorage.getItem(`blockpuzzle.weekly.${week}`) === "1"; } catch { return false; }
+};
+
+// Journey progress: the next level to play, and the best stars on each level cleared.
+interface JourneyData { next: number; stars: Record<number, number> }
+const JOURNEY_KEY = "blockpuzzle.journey";
+function readJourney(): JourneyData {
+  try {
+    const d = JSON.parse(localStorage.getItem(JOURNEY_KEY) ?? "null") as Partial<JourneyData> | null;
+    return { next: Math.max(1, Number(d?.next) || 1), stars: d?.stars && typeof d.stars === "object" ? d.stars : {} };
+  } catch { return { next: 1, stars: {} }; }
+}
+function writeJourney(j: JourneyData): void {
+  try { localStorage.setItem(JOURNEY_KEY, JSON.stringify(j)); } catch { /* ignore */ }
+}
+
+/** Ends a game that has run out of moves, banking its stats. */
+function endGame(): void {
+  state.over = true;
+  overT = 0;
+  sfx.gameOver();
+  haptics.gameOver();
+  if (state.kind === "classic" || state.kind === "weekly") {
+    stats.finished++;
+    stats.total += state.score;
+    const b = scoreBucket(state.score);
+    stats.hist[b] = (stats.hist[b] ?? 0) + 1;
+    banked = state.score;
+  }
+  if (state.daily && !state.practice) recordOfficial(false);
+  saveStats();
+  checkBadges(null);
+}
+
+/** Zen rescue: clears the fullest line, with the usual clear animation. Returns false if there is nothing to clear. */
+function easeZen(): boolean {
+  const line = fullestLine(state.grid);
+  if (!line) return false;
+  const lr = line.cells.reduce((a, [r]) => a + r, 0) / line.cells.length;
+  const lc = line.cells.reduce((a, [, c]) => a + c, 0) / line.cells.length;
+  const filled = line.cells.filter(([r, c]) => state.grid[r]![c]);
+  clears.push({
+    lines: 1, t: 0, count: 0,
+    cells: filled.map(([r, c]) => ({
+      r, c, ci: colorGrid[r]![c]!, fired: false,
+      delay: reduceMotion ? 0 : Math.min(0.4, Math.hypot(r - lr, c - lc) * 0.05),
+    })),
+  });
+  for (const [r, c] of filled) colorGrid[r]![c] = -1;
+  state.grid = clearCells(state.grid, line.cells);
+  praises.push({ text: "Breathe", t: 0, level: 1 });
+  sfx.praise(1);
+  haptics.tick();
+  return true;
 }
 
 // ---- Drag ----------------------------------------------------------------------
@@ -466,6 +694,7 @@ canvas.addEventListener("pointerdown", (e) => {
   if (hintOn) { hintPress = true; return; }
   if (chIntro) { chPress = chHit(e.clientX, e.clientY); return; }
   if (statsOn) { statsPress = { x: e.clientX, y: e.clientY }; return; }
+  if (modesOn) { modesPress = { x: e.clientX, y: e.clientY }; return; }
   if (state.over) {
     // Act on release, not press: share() needs a completed gesture on iOS.
     if (overT >= 0.6) overPress = overHit(e.clientX, e.clientY);
@@ -479,7 +708,7 @@ canvas.addEventListener("pointerdown", (e) => {
   }
   const [tx, ty] = THEME_C();
   if (Math.hypot(e.clientX - tx, e.clientY - ty) <= 19) { cycleTheme(); themeShownAt = clock; haptics.tick(); return; }
-  if (inRect(CHIP, e.clientX, e.clientY)) { startDaily(state.daily ? null : today()); return; }
+  if (inRect(CHIP, e.clientX, e.clientY)) { modesOn = true; modesView = "main"; modesT = 0; haptics.tick(); return; }
   if (canUndo() && inRect(undoRect(), e.clientX, e.clientY)) { undo(); return; }
   if (drag) return;
   const slot = slotAt(e.clientX, e.clientY);
@@ -507,7 +736,41 @@ canvas.addEventListener("pointerup", (e) => {
     if (chHit(e.clientX, e.clientY) !== want) return;
     chIntro = null;
     chT = 0;
-    if (want === "play") reset(null, ch);
+    if (want === "play") reset({ ch });
+    return;
+  }
+  if (modesPress) {
+    const down = modesPress;
+    modesPress = null;
+    if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 12) return;
+    const l = modesLayout();
+    const lx = (e.clientX - W / 2) / l.k;
+    const ly = (e.clientY - H / 2) / l.k;
+    const inCard = Math.abs(lx) <= l.cw / 2 && Math.abs(ly) <= MODES_H / 2;
+    if (!inCard) { modesOn = false; return; }
+    if (ly >= 232 && ly <= 280 && Math.abs(lx) <= 90) {
+      if (modesView === "archive") modesView = "main"; else modesOn = false;
+      haptics.tick();
+      return;
+    }
+    if (modesView === "main") {
+      for (let i = 0; i < 6; i++) {
+        const y = -200 + i * 70;
+        if (ly >= y && ly <= y + 62 && Math.abs(lx) <= l.cw / 2 - 16) { pickMode(i); return; }
+      }
+    } else {
+      const dates = archiveDates();
+      const cw2 = (l.cw - 48 - 10) / 2;
+      for (let i = 0; i < dates.length; i++) {
+        const x = -l.cw / 2 + 24 + (i % 2) * (cw2 + 10);
+        const y = -200 + Math.floor(i / 2) * 58;
+        if (lx >= x && lx <= x + cw2 && ly >= y && ly <= y + 50) {
+          modesOn = false;
+          startGame({ daily: dates[i]! });
+          return;
+        }
+      }
+    }
     return;
   }
   if (statsPress) {
@@ -516,18 +779,19 @@ canvas.addEventListener("pointerup", (e) => {
     const l = statsLayout();
     const lx = (e.clientX - W / 2) / l.k;
     const ly = (e.clientY - H / 2) / l.k;
-    const hit = (x: number, y: number): number => {
+    if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 12) return;
+    for (let t = 0; t < TABS.length; t++) {
+      const r = tabRect(t, l.cw);
+      if (lx >= r.x && lx <= r.x + r.w && ly >= r.y && ly <= r.y + r.h) { statsTab = t; badgeSel = -1; haptics.tick(); return; }
+    }
+    if (statsTab === 1) {
       for (let i = 0; i < BADGES.length; i++) {
         const b = badgeCell(i, l);
-        if (x >= b.x - b.w / 2 && x <= b.x + b.w / 2 && y >= b.y && y <= b.y + 62) return i;
+        if (lx >= b.x - b.w / 2 && lx <= b.x + b.w / 2 && ly >= b.y && ly <= b.y + 54) { badgeSel = badgeSel === i ? -1 : i; haptics.tick(); return; }
       }
-      return -1;
-    };
-    if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 12) return;
-    const i = hit(lx, ly);
-    if (i >= 0) { badgeSel = badgeSel === i ? -1 : i; haptics.tick(); return; }
+    }
     const inCard = Math.abs(lx) <= l.cw / 2 && ly >= -CARD_H / 2 && ly <= CARD_H / 2;
-    const onClose = Math.abs(lx) <= 90 && ly >= 284 && ly <= 336;
+    const onClose = Math.abs(lx) <= 90 && ly >= 244 && ly <= 294;
     if (!inCard || onClose) statsOn = false;
     return;
   }
@@ -542,8 +806,10 @@ canvas.addEventListener("pointerup", (e) => {
     if (overHit(e.clientX, e.clientY) !== want) return;
     if (want === "share") void shareScore();
     else if (want === "undo") undo();
-    else if (want === "mode") reset(state.daily ? null : today());
-    else reset(state.daily, state.challenge !== null ? { seed: state.seed, target: state.challenge } : null); // a lost challenge replays the same pieces
+    else if (want === "mode") reset(state.kind !== "classic" ? {} : state.daily ? {} : { daily: today() });
+    else if (state.kind === "journey") reset({ kind: "journey", level: (state.level ?? 1) + (state.won ? 1 : 0) });
+    else if (state.kind !== "classic") reset({ kind: state.kind });
+    else reset({ daily: state.daily, ch: state.challenge !== null ? { seed: state.seed, target: state.challenge } : null }); // a lost challenge replays the same pieces
     return;
   }
   if (!drag || e.pointerId !== drag.pointerId) return;
@@ -552,13 +818,14 @@ canvas.addEventListener("pointerup", (e) => {
   const color = colorIndex(drag.shape);
   if (t?.ok) {
     const res = place(state.grid, drag.shape, t.row, t.col, state.combo);
-    const lines = res.rowsCleared.length + res.colsCleared.length;
+    const lines = res.rowsCleared.length + res.colsCleared.length + res.regionsCleared.length;
     const perfect = lines > 0 && isEmpty(res.grid);
     snap = {
       grid: state.grid, tray: [...state.tray], score: state.score, combo: state.combo,
       trays: state.trays, colors: colorGrid.map((r) => r.slice()),
+      moves: state.moves, lines: state.lines, wk: state.wk ? { ...state.wk } : null,
     };
-    if (state.daily === today()) bumpStreak();
+    if (state.daily === today() && !state.practice) bumpStreak();
     moves++;
     maybeShowInstall();
 
@@ -589,10 +856,7 @@ canvas.addEventListener("pointerup", (e) => {
 
     if (lines > 0) {
       // Record the cleared cells (and their colours) before the grid forgets them.
-      const cells = new Set<string>();
-      for (const r of res.rowsCleared) for (let c = 0; c < SIZE; c++) cells.add(`${r},${c}`);
-      for (const c of res.colsCleared) for (let r = 0; r < SIZE; r++) cells.add(`${r},${c}`);
-      const list = [...cells].map((k) => k.split(",").map(Number) as [number, number]);
+      const list = clearedCells(res).map(([r, c]) => [r, c] as [number, number]);
       const { rows: pr, cols: pc } = shapeSize(drag.shape);
       const lr = t.row + (pr - 1) / 2;
       const lc = t.col + (pc - 1) / 2;
@@ -657,16 +921,22 @@ canvas.addEventListener("pointerup", (e) => {
     }
 
     state.grid = res.grid;
-    state.score += res.points + (perfect ? PERFECT_BONUS : 0);
+    const gained = res.points + (perfect ? PERFECT_BONUS : 0);
+    state.score += gained;
     state.combo = res.combo;
+    state.moves++;
+    state.lines += lines;
+    // Zen and journey games do not feed the score records: their goals are not a score race.
+    const scored = state.kind === "classic" || state.kind === "weekly";
     if (!gameCounted) { gameCounted = true; stats.games++; }
     stats.moves++;
     stats.lines += lines;
     stats.bestCombo = Math.max(stats.bestCombo, res.combo);
-    stats.bestScore = Math.max(stats.bestScore, state.score);
+    if (scored) stats.bestScore = Math.max(stats.bestScore, state.score);
+    if (state.kind === "zen") stats.zenLines += lines;
     if (perfect) stats.perfects++;
     saveStats();
-    checkBadges({ lines, combo: res.combo, perfect });
+    checkBadges({ lines, combo: res.combo, perfect, regions: res.regionsCleared.length });
     if (state.challenge !== null && !challengeBeaten && state.score > state.challenge) {
       challengeBeaten = true;
       stats.challengesWon++;
@@ -677,18 +947,21 @@ canvas.addEventListener("pointerup", (e) => {
       haptic([30, 40, 30, 40, 90]);
       checkBadges(null);
     }
+    trackModes({ lines, cells: drag.shape.length, points: gained });
     state.tray[drag.slot] = null;
     if (state.tray.every((s) => s === null)) state.tray = makeTray(state.grid, state.seed, state.trays++);
-    if (state.score > state.best) {
+    if (scored && state.score > state.best) {
       state.best = state.score;
       try { localStorage.setItem(bestKey(state.daily), String(state.best)); } catch { /* ignore */ }
     }
-    const remaining = state.tray.filter((s): s is Shape => s !== null);
-    if (!hasMoves(state.grid, remaining)) {
-      state.over = true; overT = 0; sfx.gameOver(); haptics.gameOver();
-      stats.finished++; stats.total += state.score; banked = state.score;
-      saveStats();
-      checkBadges(null);
+    if (!state.over) {
+      let remaining = state.tray.filter((s): s is Shape => s !== null);
+      // Zen has no game over: when nothing fits, the fullest line is cleared to keep you going.
+      for (let guard = 0; state.kind === "zen" && !hasMoves(state.grid, remaining) && guard < 4; guard++) {
+        if (!easeZen()) break;
+        remaining = state.tray.filter((s): s is Shape => s !== null);
+      }
+      if (!hasMoves(state.grid, remaining)) endGame();
     }
     save();
   } else {
@@ -761,11 +1034,11 @@ function block(x: number, y: number, s: number, hex: string): void {
   ctx.fill();
 }
 
-function emptyCell(x: number, y: number, s: number): void {
+function emptyCell(x: number, y: number, s: number, alt = false): void {
   const g = Math.max(1, s * 0.04);
   const grad = ctx.createLinearGradient(x, y, x, y + s);
-  grad.addColorStop(0, "#151925");
-  grad.addColorStop(1, "#1d2230");
+  grad.addColorStop(0, alt ? "#1a2030" : "#151925");
+  grad.addColorStop(1, alt ? "#232a3d" : "#1d2230");
   ctx.fillStyle = grad;
   ctx.beginPath();
   ctx.roundRect(x + g, y + g, s - g * 2, s - g * 2, s * 0.22);
@@ -823,8 +1096,36 @@ function label(text: string, x: number, y: number, align: CanvasTextAlign): void
 }
 
 function drawHud(): void {
-  label(state.challenge !== null ? "CHALLENGE" : state.daily ? "DAILY" : "SCORE", 22, 20, "left");
-  label(state.challenge !== null ? "TARGET" : state.daily ? "BEST TODAY" : "BEST", W - 22, 20, "right");
+  const lv = state.kind === "journey" && state.level ? makeLevel(state.level) : null;
+  const wk = state.kind === "weekly" && state.week ? weeklyFor(state.week) : null;
+  let leftLabel = "SCORE";
+  let rightLabel = "BEST";
+  let leftValue = String(Math.round(shownScore));
+  let rightValue = String(state.best);
+  let hot = state.score >= state.best && state.score > 0;
+  if (state.challenge !== null) {
+    leftLabel = "CHALLENGE"; rightLabel = "TARGET"; rightValue = String(state.challenge); hot = state.score > state.challenge;
+  } else if (lv) {
+    const prog = { score: Math.round(shownScore), lines: state.lines, moves: state.moves };
+    leftLabel = `LEVEL ${lv.n}`;
+    rightLabel = `GOAL \u00B7 ${lv.goal.kind === "score" ? "POINTS" : lv.goal.kind === "lines" ? "LINES" : "PIECES"}`;
+    leftValue = String(goalValue(lv, prog));
+    rightValue = lv.goal.target.toLocaleString("en-US");
+    hot = goalReached(lv, { score: state.score, lines: state.lines, moves: state.moves });
+  } else if (wk && state.wk) {
+    leftLabel = "WEEKLY";
+    rightLabel = weeklyFailed(wk, state.wk) ? "RULE BROKEN" : `GOAL \u00B7 ${wk.unit.toUpperCase()}`;
+    leftValue = String(weeklyValue(wk, state.wk));
+    rightValue = String(wk.goal);
+    hot = weeklyDone(wk, state.wk);
+  } else if (state.kind === "zen") {
+    leftLabel = "ZEN \u00B7 LINES"; rightLabel = "PLACED"; leftValue = String(state.lines); rightValue = String(state.moves); hot = false;
+  } else if (state.daily) {
+    leftLabel = state.practice ? (state.daily === today() ? "PRACTICE" : "ARCHIVE") : "DAILY";
+    rightLabel = state.practice ? "BEST" : "BEST TODAY";
+  }
+  label(leftLabel, 22, 20, "left");
+  label(rightLabel, W - 22, 20, "right");
   ctx.fillStyle = COLORS.text;
   ctx.font = `700 28px ${FONT}`;
   ctx.textAlign = "left";
@@ -832,12 +1133,11 @@ function drawHud(): void {
   ctx.translate(22, 43);
   const bump = reduceMotion ? 1 : 1 + 0.2 * scorePulse * scorePulse;
   ctx.scale(bump, bump);
-  ctx.fillText(String(Math.round(shownScore)), 0, 0);
+  ctx.fillText(leftValue, 0, 0);
   ctx.restore();
   ctx.textAlign = "right";
-  const beating = state.challenge !== null ? state.score > state.challenge : state.score >= state.best && state.score > 0;
-  ctx.fillStyle = beating ? COLORS.combo : COLORS.text;
-  ctx.fillText(String(state.challenge ?? state.best), W - 22, 43);
+  ctx.fillStyle = hot ? COLORS.combo : COLORS.text;
+  ctx.fillText(rightValue, W - 22, 43);
 
   if (state.combo < 2) {
     ctx.fillStyle = COLORS.dim;
@@ -893,7 +1193,7 @@ function pill(r: { x: number; y: number; w: number; h: number }, text: string, h
 
 function drawControls(): void {
   const played = playedDailyToday();
-  pill(CHIP, state.daily ? "Random game" : played ? "Daily \u2713" : "Play daily", !state.daily && !played);
+  pill(CHIP, "Modes", !played && state.kind === "classic" && !state.daily);
   const streak = streakNow();
   if (streak > 0) {
     ctx.fillStyle = COLORS.combo;
@@ -954,12 +1254,22 @@ function drawBoard(): void {
   ctx.roundRect(boardX - 10.5, boardY - 10.5, bw + 21, bw + 21, 20);
   ctx.stroke();
 
+  // Each 2x4 region is outlined: filling one clears it, just like a row or column.
+  ctx.strokeStyle = "rgba(255,255,255,0.11)";
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < REGION_COUNT; i++) {
+    const [r0, c0] = regionCells(i)[0]!;
+    ctx.beginPath();
+    ctx.roundRect(boardX + c0 * cell + 1, boardY + r0 * cell + 1, REGION_W * cell - 2, REGION_H * cell - 2, cell * 0.28);
+    ctx.stroke();
+  }
+
   for (let r = 0; r < SIZE; r++)
     for (let c = 0; c < SIZE; c++) {
       const x = boardX + c * cell;
       const y = boardY + r * cell;
       const ci = colorGrid[r]![c]!;
-      if (!state.grid[r]![c]) { emptyCell(x, y, cell); continue; }
+      if (!state.grid[r]![c]) { emptyCell(x, y, cell, (regionOf(r, c) + Math.floor(regionOf(r, c) / 2)) % 2 === 0); continue; }
       // Landing spring: drops in oversized, squashes under, settles. Then a quick white flash.
       const pp = 1 - pop[r]![c]!;
       const sc = reduceMotion ? 1 : 1 + 0.26 * Math.exp(-4.4 * pp) * Math.cos(pp * Math.PI * 2.4);
@@ -1081,14 +1391,10 @@ function render(dt: number): void {
     if (t.ok) {
       // Light up any line this drop would complete.
       const res = place(state.grid, drag.shape, t.row, t.col, state.combo);
-      const lines = { rows: res.rowsCleared, cols: res.colsCleared };
       const pulse = 0.22 + 0.1 * Math.sin(clock * 10);
       ctx.fillStyle = hex;
       ctx.globalAlpha = pulse;
-      for (const r of lines.rows)
-        for (let c = 0; c < SIZE; c++) { ctx.beginPath(); ctx.roundRect(boardX + c * cell + 2, boardY + r * cell + 2, cell - 4, cell - 4, cell * 0.2); ctx.fill(); }
-      for (const c of lines.cols)
-        for (let r = 0; r < SIZE; r++) { ctx.beginPath(); ctx.roundRect(boardX + c * cell + 2, boardY + r * cell + 2, cell - 4, cell - 4, cell * 0.2); ctx.fill(); }
+      for (const [r, c] of clearedCells(res)) { ctx.beginPath(); ctx.roundRect(boardX + c * cell + 2, boardY + r * cell + 2, cell - 4, cell - 4, cell * 0.2); ctx.fill(); }
       ctx.globalAlpha = 0.45;
       drawShape(drag.shape, boardX + t.col * cell, boardY + t.row * cell, cell, hex);
       ctx.globalAlpha = 1;
@@ -1249,18 +1555,41 @@ function render(dt: number): void {
 
     const ch = state.challenge;
     const won = ch !== null && state.score > ch;
-    const isBest = ch === null && state.score > 0 && state.score > startBest;
+    const isBest = ch === null && !state.practice && state.score > 0 && state.score > startBest;
+    const lvl = state.kind === "journey" && state.level ? makeLevel(state.level) : null;
+    const par = parFor(state.daily);
+    const official = state.daily ? officialResult(state.daily) : null;
+    let head: string;
+    let big: string;
+    let sub: string;
+    let gold = isBest || won;
+    if (lvl) {
+      const prog = { score: state.score, lines: state.lines, moves: state.moves };
+      head = state.won ? `LEVEL ${lvl.n} CLEARED` : `LEVEL ${lvl.n} FAILED`;
+      big = state.won ? "\u2605".repeat(state.stars) + "\u2606".repeat(3 - state.stars) : `${goalValue(lvl, prog)}/${lvl.goal.target}`;
+      sub = goalText(lvl);
+      gold = state.won;
+    } else {
+      head = ch !== null ? (won ? "CHALLENGE WON" : state.score === ch ? "TIED" : "CHALLENGE LOST")
+        : state.practice ? (state.daily === today() ? "PRACTICE RUN" : "ARCHIVE RUN")
+        : isBest ? "NEW BEST" : "NO MOVES LEFT";
+      big = String(state.score);
+      sub = ch !== null ? (won ? `Beat ${ch} by ${state.score - ch}` : `${ch - state.score} short of ${ch}`)
+        : state.practice ? `Official ${official ? official.score.toLocaleString("en-US") : "\u2013"}${par ? ` \u00B7 Par ${par}` : ""}`
+        : state.daily && par ? (state.score >= par ? `Par ${par} \u00B7 beat it by ${state.score - par}` : `Par ${par} \u00B7 ${par - state.score} below`)
+        : `Best ${state.best}`;
+    }
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillStyle = COLORS.dim;
     ctx.font = `700 12px ${FONT}`;
-    ctx.fillText(ch !== null ? (won ? "CHALLENGE WON" : state.score === ch ? "TIED" : "CHALLENGE LOST") : isBest ? "NEW BEST" : "NO MOVES LEFT", 0, -92);
-    ctx.fillStyle = isBest || won ? COLORS.combo : COLORS.text;
-    ctx.font = `800 58px ${FONT}`;
-    ctx.fillText(String(state.score), 0, -42);
+    ctx.fillText(head, 0, -92);
+    ctx.fillStyle = gold ? COLORS.combo : COLORS.text;
+    ctx.font = `800 ${lvl ? 50 : 58}px ${FONT}`;
+    ctx.fillText(big, 0, -42);
     ctx.fillStyle = COLORS.dim;
     ctx.font = `600 14px ${FONT}`;
-    ctx.fillText(ch !== null ? (won ? `Beat ${ch} by ${state.score - ch}` : `${ch - state.score} short of ${ch}`) : `Best ${state.best}`, 0, 8);
+    ctx.fillText(sub, 0, 8, cw - 32);
 
     const bgrad = ctx.createLinearGradient(0, 40, 0, 94);
     bgrad.addColorStop(0, "#6cb4ff");
@@ -1271,7 +1600,7 @@ function render(dt: number): void {
     ctx.fill();
     ctx.fillStyle = "#fff";
     ctx.font = `700 18px ${FONT}`;
-    ctx.fillText("Play again", 0, 68);
+    ctx.fillText(lvl ? (state.won ? "Next level" : "Retry level") : "Play again", 0, 68);
 
     ctx.strokeStyle = "rgba(255,255,255,0.22)";
     ctx.lineWidth = 1.5;
@@ -1284,7 +1613,13 @@ function render(dt: number): void {
 
     ctx.fillStyle = COLORS.dim;
     ctx.font = `600 15px ${FONT}`;
-    ctx.fillText(state.daily ? "Play a random game" : "Play today\u2019s daily", 0, 186);
+    ctx.fillText(state.kind !== "classic" ? "Back to classic" : state.daily ? "Play a random game" : "Play today\u2019s daily", 0, 186);
+    if (state.daily === today()) {
+      // Plant the return trip while the player is still pleased with the result.
+      const left = timeUntilMidnight(new Date());
+      ctx.font = `500 12px ${FONT}`;
+      ctx.fillText(`Next daily in ${left.h}h ${String(left.m).padStart(2, "0")}m`, 0, 210);
+    }
     if (extra) {
       ctx.fillStyle = COLORS.combo;
       ctx.font = `700 15px ${FONT}`;
@@ -1296,6 +1631,7 @@ function render(dt: number): void {
   for (const t of toasts.slice(0, 1)) drawToast(t);
   if (chIntro && !hintOn) drawChallengeIntro(dtLast);
   if (statsOn) drawStats();
+  if (modesOn) drawModes(dtLast);
   if (hintOn) drawHint(dtLast);
 }
 
@@ -1369,7 +1705,7 @@ function drawToast(t: Toast): void {
   ctx.textBaseline = "middle";
   ctx.fillStyle = COLORS.combo;
   ctx.font = `800 11px ${FONT}`;
-  ctx.fillText("BADGE UNLOCKED", -w / 2 + 62, 17);
+  ctx.fillText(t.label ?? "BADGE UNLOCKED", -w / 2 + 62, 17);
   ctx.fillStyle = COLORS.text;
   ctx.font = `700 16px ${FONT}`;
   ctx.fillText(t.title, -w / 2 + 62, 35);
@@ -1381,15 +1717,58 @@ function drawToast(t: Toast): void {
 
 // ---- Stats screen ------------------------------------------------------------------
 
-const CARD_H = 680;
-/** Card is laid out in a 680-unit-tall box and scaled down to fit short screens. */
+const CARD_H = 600;
+const TABS = ["Stats", "Badges", "Collection"] as const;
+let statsTab = 0;
+/** Card is laid out in a 600-unit-tall box and scaled down to fit short screens. */
 function statsLayout(): { k: number; cw: number } {
   const k = Math.min(1, (H - 24) / CARD_H);
   return { k, cw: Math.min((W - 24) / k, 360) };
 }
 function badgeCell(i: number, l: { cw: number }): { x: number; y: number; w: number } {
   const w = (l.cw - 32) / 4;
-  return { x: -l.cw / 2 + 16 + w * (i % 4) + w / 2, y: -86 + Math.floor(i / 4) * 62, w };
+  return { x: -l.cw / 2 + 16 + w * (i % 4) + w / 2, y: -170 + Math.floor(i / 4) * 56, w };
+}
+const tabRect = (i: number, cw: number): { x: number; y: number; w: number; h: number } => {
+  const w = (cw - 48) / 3;
+  return { x: -cw / 2 + 24 + i * w, y: -250, w, h: 32 };
+};
+
+/** A small sunset scene, drawn in `size` x `size` at (x, y). The collection reveals it tile by tile. */
+function paintScene(x: number, y: number, size: number): void {
+  const sky = ctx.createLinearGradient(0, y, 0, y + size);
+  sky.addColorStop(0, "#2a1b63");
+  sky.addColorStop(0.5, "#d4559a");
+  sky.addColorStop(0.78, "#ffb15c");
+  sky.addColorStop(1, "#ffe39a");
+  ctx.fillStyle = sky;
+  ctx.fillRect(x, y, size, size);
+  ctx.fillStyle = "rgba(255,255,255,0.8)";
+  for (let i = 0; i < 18; i++) {
+    ctx.beginPath();
+    ctx.arc(x + ((i * 53) % 97) / 97 * size, y + ((i * 31) % 41) / 100 * size, 0.9 + (i % 3) * 0.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const sun = ctx.createRadialGradient(x + size * 0.5, y + size * 0.66, 2, x + size * 0.5, y + size * 0.66, size * 0.3);
+  sun.addColorStop(0, "#fffbe0");
+  sun.addColorStop(0.35, "#ffd86b");
+  sun.addColorStop(1, "rgba(255,170,80,0)");
+  ctx.fillStyle = sun;
+  ctx.fillRect(x, y, size, size);
+  const ridge = (color: string, base: number, amp: number, seed: number): void => {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(x, y + size);
+    for (let i = 0; i <= 24; i++) {
+      const t = i / 24;
+      ctx.lineTo(x + t * size, y + size * (base - amp * (Math.sin(t * 7 + seed) * 0.5 + Math.sin(t * 17 + seed * 2) * 0.25 + 0.6)));
+    }
+    ctx.lineTo(x + size, y + size);
+    ctx.fill();
+  };
+  ridge("#6a3a7d", 0.8, 0.2, 1);
+  ridge("#3d2160", 0.9, 0.17, 3);
+  ridge("#1c1238", 1.0, 0.13, 5);
 }
 
 function drawStats(): void {
@@ -1403,15 +1782,14 @@ function drawStats(): void {
   ctx.translate(W / 2, H / 2 + (1 - e) * 24);
   ctx.scale(l.k, l.k);
   const cw = l.cw;
-  const top = -CARD_H / 2;
-  const card = ctx.createLinearGradient(0, top, 0, -top);
+  const card = ctx.createLinearGradient(0, -CARD_H / 2, 0, CARD_H / 2);
   card.addColorStop(0, "#222840");
   card.addColorStop(1, "#151a2a");
   ctx.shadowColor = "rgba(0,0,0,0.6)";
   ctx.shadowBlur = 40;
   ctx.fillStyle = card;
   ctx.beginPath();
-  ctx.roundRect(-cw / 2, top, cw, CARD_H, 26);
+  ctx.roundRect(-cw / 2, -CARD_H / 2, cw, CARD_H, 26);
   ctx.fill();
   ctx.shadowBlur = 0;
   ctx.strokeStyle = "rgba(255,255,255,0.09)";
@@ -1421,42 +1799,117 @@ function drawStats(): void {
   ctx.textBaseline = "middle";
   ctx.textAlign = "center";
   ctx.fillStyle = COLORS.text;
-  ctx.font = `800 24px ${FONT}`;
-  ctx.fillText("Your stats", 0, -312);
+  ctx.font = `800 22px ${FONT}`;
+  ctx.fillText("Your progress", 0, -276);
+  TABS.forEach((name, i) => {
+    const r = tabRect(i, cw);
+    const on = statsTab === i;
+    ctx.fillStyle = on ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.04)";
+    ctx.beginPath();
+    ctx.roundRect(r.x + 2, r.y, r.w - 4, r.h, 16);
+    ctx.fill();
+    ctx.fillStyle = on ? COLORS.text : COLORS.dim;
+    ctx.font = `700 13px ${FONT}`;
+    ctx.fillText(name, r.x + r.w / 2, r.y + r.h / 2 + 1);
+  });
+
+  if (statsTab === 0) drawStatsTab(cw);
+  else if (statsTab === 1) drawBadgesTab(l);
+  else drawCollectionTab(cw);
+
+  const bg = ctx.createLinearGradient(0, 246, 0, 290);
+  bg.addColorStop(0, "#6cb4ff");
+  bg.addColorStop(1, "#3a82e6");
+  ctx.fillStyle = bg;
+  ctx.beginPath();
+  ctx.roundRect(-84, 248, 168, 42, 21);
+  ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.font = `700 16px ${FONT}`;
+  ctx.textAlign = "center";
+  ctx.fillText("Close", 0, 270);
+  ctx.restore();
+}
+
+function drawStatsTab(cw: number): void {
+  ctx.textAlign = "center";
   ctx.fillStyle = COLORS.combo;
   ctx.font = `700 13px ${FONT}`;
   const perk = perkUndos();
-  ctx.fillText(`Rank: ${rankName()}${perk ? `  \u00B7  +${perk} undo${perk > 1 ? "s" : ""} in random games` : ""}`, 0, -285, cw - 40);
+  ctx.fillText(`Rank: ${rankName()}${perk ? `  \u00B7  +${perk} undo${perk > 1 ? "s" : ""} in random games` : ""}`, 0, -196, cw - 40);
 
   const avg = stats.finished ? Math.round(stats.total / stats.finished) : 0;
   const tiles: [string, string][] = [
     ["Games", stats.games.toLocaleString()], ["Best score", stats.bestScore.toLocaleString()], ["Average", avg.toLocaleString()],
-    ["Best combo", `${stats.bestCombo}x`], ["Lines cleared", stats.lines.toLocaleString()], ["Daily streak", `${streakNow()} (best ${stats.bestStreak})`],
+    ["Best combo", `${stats.bestCombo}x`], ["Lines cleared", stats.lines.toLocaleString()], ["Perfect clears", String(stats.perfects)],
   ];
   const tw = (cw - 48 - 20) / 3;
   tiles.forEach(([name, value], i) => {
     const x = -cw / 2 + 24 + (i % 3) * (tw + 10);
-    const y = -258 + Math.floor(i / 3) * 74;
+    const y = -172 + Math.floor(i / 3) * 70;
     ctx.fillStyle = "rgba(255,255,255,0.05)";
     ctx.beginPath();
-    ctx.roundRect(x, y, tw, 64, 14);
+    ctx.roundRect(x, y, tw, 62, 14);
     ctx.fill();
     ctx.fillStyle = COLORS.text;
     ctx.font = `800 ${value.length > 9 ? 13 : 20}px ${FONT}`;
-    ctx.fillText(value, x + tw / 2, y + 26, tw - 8);
+    ctx.fillText(value, x + tw / 2, y + 25, tw - 8);
     ctx.fillStyle = COLORS.dim;
     ctx.font = `600 11px ${FONT}`;
-    ctx.fillText(name, x + tw / 2, y + 47, tw - 8);
+    ctx.fillText(name, x + tw / 2, y + 46, tw - 8);
   });
 
+  // Score distribution: where your finished games land.
+  ctx.textAlign = "left";
+  ctx.fillStyle = COLORS.text;
+  ctx.font = `800 14px ${FONT}`;
+  ctx.fillText("Score distribution", -cw / 2 + 24, -16);
+  const peak = Math.max(1, ...stats.hist);
+  stats.hist.forEach((count, i) => {
+    const y = 4 + i * 23;
+    ctx.fillStyle = COLORS.dim;
+    ctx.font = `600 11px ${FONT}`;
+    ctx.textAlign = "left";
+    ctx.fillText(BUCKET_LABELS[i]!, -cw / 2 + 24, y + 9);
+    const maxW = cw - 48 - 64;
+    ctx.fillStyle = "rgba(255,255,255,0.06)";
+    ctx.beginPath();
+    ctx.roundRect(-cw / 2 + 64, y, maxW, 18, 6);
+    ctx.fill();
+    if (count > 0) {
+      const g = ctx.createLinearGradient(-cw / 2 + 64, 0, -cw / 2 + 64 + maxW, 0);
+      g.addColorStop(0, "#6cb4ff");
+      g.addColorStop(1, "#9a7bff");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.roundRect(-cw / 2 + 64, y, Math.max(8, (maxW * count) / peak), 18, 6);
+      ctx.fill();
+    }
+    ctx.fillStyle = COLORS.text;
+    ctx.textAlign = "right";
+    ctx.font = `700 11px ${FONT}`;
+    ctx.fillText(String(count), -cw / 2 + 64 + maxW - 6, y + 10);
+  });
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = COLORS.dim;
+  ctx.font = `600 12px ${FONT}`;
+  const rec = readStreak();
+  const freeze = freezeAvailable(rec, today()) ? "freeze ready" : "freeze used this week";
+  ctx.fillText(`Daily streak ${streakNow()} \u00B7 best ${stats.bestStreak} \u00B7 ${freeze}`, 0, 168, cw - 40);
+  ctx.fillText(`Weekly wins ${stats.weeklyWins} \u00B7 Journey levels ${stats.levels} \u00B7 Zen lines ${stats.zenLines}`, 0, 192, cw - 40);
+}
+
+function drawBadgesTab(l: { cw: number }): void {
+  const cw = l.cw;
   ctx.textAlign = "left";
   ctx.fillStyle = COLORS.text;
   ctx.font = `800 15px ${FONT}`;
-  ctx.fillText("Badges", -cw / 2 + 24, -106);
+  ctx.fillText("Badges", -cw / 2 + 24, -196);
   ctx.textAlign = "right";
   ctx.fillStyle = COLORS.dim;
   ctx.font = `700 13px ${FONT}`;
-  ctx.fillText(`${unlocked.length} / ${BADGES.length}`, cw / 2 - 24, -106);
+  ctx.fillText(`${unlocked.length} / ${BADGES.length}`, cw / 2 - 24, -196);
 
   ctx.textAlign = "center";
   BADGES.forEach((b, i) => {
@@ -1465,47 +1918,47 @@ function drawStats(): void {
     if (badgeSel === i) {
       ctx.fillStyle = "rgba(255,255,255,0.07)";
       ctx.beginPath();
-      ctx.roundRect(c.x - c.w / 2 + 2, c.y - 4, c.w - 4, 62, 12);
+      ctx.roundRect(c.x - c.w / 2 + 2, c.y - 3, c.w - 4, 54, 12);
       ctx.fill();
     }
     if (got) {
-      const g = ctx.createLinearGradient(0, c.y, 0, c.y + 34);
+      const g = ctx.createLinearGradient(0, c.y, 0, c.y + 30);
       g.addColorStop(0, "#fff0b3");
       g.addColorStop(1, "#ffb42e");
       ctx.fillStyle = g;
       ctx.shadowColor = "rgba(255,180,46,0.6)";
-      ctx.shadowBlur = 12;
-      star(c.x, c.y + 16, 16);
+      ctx.shadowBlur = 10;
+      star(c.x, c.y + 14, 14);
       ctx.fill();
       ctx.shadowBlur = 0;
     } else {
       ctx.strokeStyle = "rgba(255,255,255,0.2)";
       ctx.lineWidth = 1.5;
-      star(c.x, c.y + 16, 15);
+      star(c.x, c.y + 14, 13);
       ctx.stroke();
       const pr = b.progress?.();
       if (pr) {
-        // Progress toward a locked badge.
         const bw = c.w - 22;
         ctx.fillStyle = "rgba(255,255,255,0.1)";
         ctx.beginPath();
-        ctx.roundRect(c.x - bw / 2, c.y + 50, bw, 4, 2);
+        ctx.roundRect(c.x - bw / 2, c.y + 44, bw, 4, 2);
         ctx.fill();
         ctx.fillStyle = COLORS.combo;
         ctx.beginPath();
-        ctx.roundRect(c.x - bw / 2, c.y + 50, Math.max(3, bw * Math.min(1, pr[0] / pr[1])), 4, 2);
+        ctx.roundRect(c.x - bw / 2, c.y + 44, Math.max(3, bw * Math.min(1, pr[0] / pr[1])), 4, 2);
         ctx.fill();
       }
     }
     ctx.fillStyle = got ? COLORS.text : "#586079";
     ctx.font = `600 11px ${FONT}`;
-    ctx.fillText(b.name, c.x, c.y + 39, c.w - 4);
+    ctx.fillText(b.name, c.x, c.y + 35, c.w - 4);
   });
 
   const sel = badgeSel >= 0 ? BADGES[badgeSel] : undefined;
+  ctx.textAlign = "center";
   ctx.fillStyle = COLORS.dim;
   ctx.font = `500 13px ${FONT}`;
-  ctx.fillText(sel ? `${sel.name}: ${sel.desc}` : "Tap a badge to see how to earn it.", 0, 252, cw - 40);
+  ctx.fillText(sel ? `${sel.name}: ${sel.desc}` : "Tap a badge to see how to earn it.", 0, 178, cw - 40);
   if (sel) {
     const pr = sel.progress?.();
     const got = unlocked.includes(sel.id);
@@ -1515,24 +1968,189 @@ function drawStats(): void {
       got ? "Earned" : pr ? `Progress ${Math.min(pr[0], pr[1]).toLocaleString()} / ${pr[1].toLocaleString()}` : "",
       sel.reward ? `Reward: ${sel.reward}` : "",
     ].filter(Boolean);
-    ctx.fillText(bits.join("  \u00B7  "), 0, 274, cw - 40);
+    ctx.fillText(bits.join("  \u00B7  "), 0, 200, cw - 40);
   } else {
+    ctx.font = `500 12px ${FONT}`;
+    ctx.fillText("Every 5 badges: +1 undo in random games.", 0, 200, cw - 40);
+  }
+}
+
+function drawCollectionTab(cw: number): void {
+  const n = collectionTiles();
+  const size = Math.min(264, cw - 64);
+  const tile = size / 4;
+  const x0 = -size / 2;
+  const y0 = -196;
+  const shown = new Set(TILE_ORDER.slice(0, n));
+  for (let i = 0; i < COLLECTION_SIZE; i++) {
+    const tx = x0 + (i % 4) * tile;
+    const ty = y0 + Math.floor(i / 4) * tile;
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(tx + 1.5, ty + 1.5, tile - 3, tile - 3, 8);
+    ctx.clip();
+    if (shown.has(i)) {
+      paintScene(x0, y0, size);
+    } else {
+      ctx.fillStyle = "#12162a";
+      ctx.fillRect(tx, ty, tile, tile);
+      ctx.fillStyle = "rgba(255,255,255,0.12)";
+      ctx.font = `700 ${Math.round(tile * 0.4)}px ${FONT}`;
+      ctx.textAlign = "center";
+      ctx.fillText("?", tx + tile / 2, ty + tile / 2 + 1);
+    }
+    ctx.restore();
+  }
+  ctx.textAlign = "center";
+  ctx.fillStyle = COLORS.text;
+  ctx.font = `800 15px ${FONT}`;
+  ctx.fillText(`${n} / ${COLLECTION_SIZE} tiles`, 0, y0 + size + 24);
+  ctx.fillStyle = COLORS.dim;
+  ctx.font = `500 12px ${FONT}`;
+  const toNext = 40 - (stats.lines % 40);
+  ctx.fillText(n >= COLLECTION_SIZE ? "Complete! The Prism theme is yours." : `Next tile in ${toNext} lines, or a weekly win or 5 journey levels.`, 0, y0 + size + 46, cw - 40);
+  ctx.fillStyle = COLORS.combo;
+  ctx.font = `700 12px ${FONT}`;
+  ctx.fillText(n >= COLLECTION_SIZE ? "Unlocked: Prism theme" : "Reward: Prism theme when complete", 0, y0 + size + 68, cw - 40);
+}
+
+// ---- Modes sheet ------------------------------------------------------------------
+
+const MODES_H = 580;
+function modesLayout(): { k: number; cw: number } {
+  const k = Math.min(1, (H - 24) / MODES_H);
+  return { k, cw: Math.min((W - 24) / k, 350) };
+}
+
+/** The last fortnight of dailies, newest first, for the archive. */
+const archiveDates = (): string[] => Array.from({ length: 14 }, (_, i) => addDays(today(), -(i + 1)));
+
+function pickMode(i: number): void {
+  haptics.tick();
+  if (i === 5) { modesView = "archive"; return; }
+  modesOn = false;
+  if (i === 0) startGame({});
+  else if (i === 1) startGame({ daily: today() });
+  else if (i === 2) startGame({ kind: "weekly" });
+  else if (i === 3) startGame({ kind: "journey", level: readJourney().next });
+  else startGame({ kind: "zen" });
+}
+
+function drawModes(dt: number): void {
+  modesT = Math.min(1, modesT + dt * 3);
+  const l = modesLayout();
+  const e = 1 - Math.pow(1 - modesT, 3);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = `rgba(7,9,14,${0.86 * e})`;
+  ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  ctx.globalAlpha = e;
+  ctx.translate(W / 2, H / 2 + (1 - e) * 24);
+  ctx.scale(l.k, l.k);
+  const cw = l.cw;
+  const card = ctx.createLinearGradient(0, -MODES_H / 2, 0, MODES_H / 2);
+  card.addColorStop(0, "#222840");
+  card.addColorStop(1, "#151a2a");
+  ctx.shadowColor = "rgba(0,0,0,0.6)";
+  ctx.shadowBlur = 40;
+  ctx.fillStyle = card;
+  ctx.beginPath();
+  ctx.roundRect(-cw / 2, -MODES_H / 2, cw, MODES_H, 26);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(255,255,255,0.09)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+  ctx.fillStyle = COLORS.text;
+  ctx.font = `800 22px ${FONT}`;
+  ctx.fillText(modesView === "main" ? "Choose a mode" : "Daily archive", 0, -252);
+
+  if (modesView === "main") {
+    const t = today();
+    const off = officialResult(t);
+    const par = parFor(t);
+    const wk = weeklyFor(weekId(t));
+    const j = readJourney();
+    const stars = Object.values(j.stars).reduce((a, b) => a + b, 0);
+    const rows: { icon: string; name: string; sub: string; tag?: string; hot?: boolean }[] = [
+      { icon: "\u{1F3B2}", name: "Classic", sub: "Endless. Chase your best score." },
+      {
+        icon: "\u{1F4C5}", name: "Daily",
+        sub: off ? `Your result: ${off.score.toLocaleString("en-US")}${par ? ` \u00B7 par ${par}` : ""}. Replays are practice.` : `Same pieces for everyone${par ? ` \u00B7 par ${par}` : ""}.`,
+        tag: streakNow() > 0 ? `\u{1F525} ${streakNow()}` : undefined, hot: !off,
+      },
+      { icon: "\u26A1", name: `Weekly: ${wk.title}`, sub: wk.rule, tag: weeklyCompleted(weekId(t)) ? "\u2713 done" : undefined, hot: !weeklyCompleted(weekId(t)) },
+      { icon: "\u{1F9ED}", name: "Journey", sub: `Level ${j.next} next \u00B7 ${stars} \u2605 earned` },
+      { icon: "\u{1F33F}", name: "Zen", sub: "No game over. Relax and clear lines." },
+      { icon: "\u{1F5C2}", name: "Daily archive", sub: "Replay the last two weeks of dailies." },
+    ];
+    rows.forEach((r, i) => {
+      const y = -200 + i * 70;
+      ctx.fillStyle = r.hot ? "rgba(255,197,85,0.09)" : "rgba(255,255,255,0.05)";
+      ctx.beginPath();
+      ctx.roundRect(-cw / 2 + 16, y, cw - 32, 62, 16);
+      ctx.fill();
+      if (r.hot) {
+        ctx.strokeStyle = "rgba(255,197,85,0.4)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+      ctx.textAlign = "left";
+      ctx.font = `600 24px ${FONT}`;
+      ctx.fillStyle = COLORS.text;
+      ctx.fillText(r.icon, -cw / 2 + 30, y + 31);
+      ctx.font = `700 15px ${FONT}`;
+      ctx.fillText(r.name, -cw / 2 + 68, y + 21, cw - 150);
+      ctx.fillStyle = COLORS.dim;
+      ctx.font = `500 12px ${FONT}`;
+      ctx.fillText(r.sub, -cw / 2 + 68, y + 43, cw - 110);
+      if (r.tag) {
+        ctx.textAlign = "right";
+        ctx.fillStyle = COLORS.combo;
+        ctx.font = `800 12px ${FONT}`;
+        ctx.fillText(r.tag, cw / 2 - 28, y + 21);
+      }
+    });
+  } else {
+    const dates = archiveDates();
+    const cw2 = (cw - 48 - 10) / 2;
+    dates.forEach((d, i) => {
+      const x = -cw / 2 + 24 + (i % 2) * (cw2 + 10);
+      const y = -200 + Math.floor(i / 2) * 58;
+      const off = officialResult(d);
+      ctx.fillStyle = "rgba(255,255,255,0.05)";
+      ctx.beginPath();
+      ctx.roundRect(x, y, cw2, 50, 14);
+      ctx.fill();
+      ctx.textAlign = "left";
+      ctx.fillStyle = COLORS.text;
+      ctx.font = `700 14px ${FONT}`;
+      const [yy, mm, dd] = d.split("-").map(Number);
+      ctx.fillText(new Date(yy!, mm! - 1, dd!).toLocaleDateString("en-US", { month: "short", day: "numeric", weekday: "short" }), x + 14, y + 19);
+      ctx.fillStyle = off ? COLORS.combo : COLORS.dim;
+      ctx.font = `600 12px ${FONT}`;
+      ctx.fillText(off ? `${off.score.toLocaleString("en-US")}${parFor(d) ? ` / par ${parFor(d)}` : ""}` : "Not played", x + 14, y + 38, cw2 - 24);
+    });
+    ctx.textAlign = "center";
     ctx.fillStyle = COLORS.dim;
     ctx.font = `500 12px ${FONT}`;
-    ctx.fillText("Every 5 badges: +1 undo in random games.", 0, 274, cw - 40);
+    ctx.fillText("Archive runs never count toward your streak.", 0, 218);
   }
 
-  const bg = ctx.createLinearGradient(0, 288, 0, 332);
+  const bg = ctx.createLinearGradient(0, 232, 0, 280);
   bg.addColorStop(0, "#6cb4ff");
   bg.addColorStop(1, "#3a82e6");
   ctx.fillStyle = bg;
   ctx.beginPath();
-  ctx.roundRect(-84, 290, 168, 42, 21);
+  ctx.roundRect(-84, 236, 168, 42, 21);
   ctx.fill();
   ctx.fillStyle = "#fff";
   ctx.font = `700 16px ${FONT}`;
   ctx.textAlign = "center";
-  ctx.fillText("Close", 0, 312);
+  ctx.fillText(modesView === "archive" ? "Back" : "Close", 0, 258);
   ctx.restore();
 }
 
@@ -1630,7 +2248,7 @@ function drawHint(dt: number): void {
 
   const steps = [
     ["Drag", "a piece from the tray onto the board."],
-    ["Fill", "a whole row or column to clear it."],
+    ["Fill", "a row, column or outlined 2\u00D74 block."],
     ["Chain", "clears for combo bonuses. No timer, no rotating."],
   ];
   steps.forEach(([head, body], i) => {

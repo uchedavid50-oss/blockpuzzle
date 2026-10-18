@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PERFECT_BONUS, isEmpty, SIZE, canPlace, canPlaceAnywhere, emptyGrid, hasMoves, place, type Grid, type Shape } from "./board";
+import { PERFECT_BONUS, REGION_COUNT, clearCells, clearedCells, fullestLine, isEmpty, regionCells, regionOf, SIZE, canPlace, canPlaceAnywhere, emptyGrid, hasMoves, place, type Grid, type Shape } from "./board";
 
 const dot: Shape = [[0, 0]];
 const h = (n: number): Shape => Array.from({ length: n }, (_, i) => [0, i] as const);
@@ -119,4 +119,65 @@ describe("perfect clear", () => {
     expect(isEmpty(place(filled(cells), dot, 2, 7).grid)).toBe(false);
   });
   it("the bonus is a positive constant", () => expect(PERFECT_BONUS).toBeGreaterThan(0));
+});
+
+describe("2x4 regions", () => {
+  it("there are eight regions that tile the board exactly once", () => {
+    expect(REGION_COUNT).toBe(8);
+    const seen = new Set<number>();
+    for (let i = 0; i < REGION_COUNT; i++) for (const [r, c] of regionCells(i)) { seen.add(r * SIZE + c); expect(regionOf(r, c)).toBe(i); }
+    expect(seen.size).toBe(SIZE * SIZE);
+  });
+  it("filling a 2x4 region clears it, without needing a full row or column", () => {
+    const cells = regionCells(0).filter(([r, c]) => !(r === 1 && c === 3));
+    const res = place(filled(cells as [number, number][]), dot, 1, 3);
+    expect(res.regionsCleared).toEqual([0]);
+    expect(res.rowsCleared).toEqual([]);
+    expect(res.colsCleared).toEqual([]);
+    expect(isEmpty(res.grid)).toBe(true);
+  });
+  it("regions are 2 rows by 4 columns, so a 4x2 block elsewhere does not count", () => {
+    const cells: [number, number][] = [[0, 0], [1, 0], [2, 0], [3, 0], [0, 1], [1, 1], [2, 1]];
+    const res = place(filled(cells), dot, 3, 1);
+    expect(res.regionsCleared).toEqual([]);
+  });
+  it("a row and the region it completes score together and clear in one pass", () => {
+    // Row 1 and region 0 (rows 0-1, cols 0-3) both complete with the last cell at (1,3).
+    const cells: [number, number][] = [];
+    for (let c = 0; c < SIZE; c++) if (c !== 3) cells.push([1, c]);
+    for (let c = 0; c < 4; c++) cells.push([0, c]);
+    const res = place(filled(cells), dot, 1, 3);
+    expect(res.rowsCleared).toEqual([1]);
+    expect(res.regionsCleared).toEqual([0]);
+    expect(res.points).toBe(1 + SIZE * 4); // two "lines" at once: 8 * 2^2
+    expect(res.grid[0]!.slice(0, 4).every((x) => !x)).toBe(true);
+  });
+  it("classic rules (regions off) ignore regions", () => {
+    const cells = regionCells(0).filter(([r, c]) => !(r === 1 && c === 3));
+    const res = place(filled(cells as [number, number][]), dot, 1, 3, 0, false);
+    expect(res.regionsCleared).toEqual([]);
+    expect(res.grid[1]![3]).toBe(true);
+  });
+  it("clearedCells lists each cell once even when lines cross", () => {
+    const list = clearedCells({ rowsCleared: [0], colsCleared: [0], regionsCleared: [0] });
+    const keys = list.map(([r, c]) => r * SIZE + c);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys.length).toBe(18); // row 0 (8) + column 0 (7 new) + region 0 (3 new)
+  });
+});
+
+describe("fullestLine (zen rescue)", () => {
+  it("returns null on an empty board", () => expect(fullestLine(emptyGrid())).toBeNull());
+  it("picks the line nearest to full that is not already full", () => {
+    const g = filled([[2, 0], [2, 1], [2, 2], [2, 3], [2, 4], [2, 5], [2, 6]]); // row 2 is 7/8
+    const best = fullestLine(g)!;
+    expect(best.kind).toBe("row");
+    expect(best.index).toBe(2);
+    expect(best.cells.length).toBe(8);
+  });
+  it("clearing it frees the cells", () => {
+    const g = filled([[2, 0], [2, 1], [2, 2], [2, 3], [2, 4], [2, 5], [2, 6]]);
+    const cleared = clearCells(g, fullestLine(g)!.cells);
+    expect(isEmpty(cleared)).toBe(true);
+  });
 });
