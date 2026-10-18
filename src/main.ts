@@ -12,14 +12,40 @@ interface State {
   best: number;
   combo: number;
   over: boolean;
+  daily: string | null; // YYYY-MM-DD when playing that day's shared sequence
+  trays: number; // trays dealt so far; with the date it fixes the daily sequence
 }
 
 const BEST_KEY = "blockpuzzle.best";
 const SAVE_KEY = "blockpuzzle.save";
 
-const loadBest = (): number => {
-  try { return Number(localStorage.getItem(BEST_KEY)) || 0; } catch { return 0; }
+const bestKey = (daily: string | null): string => (daily ? `blockpuzzle.daily.${daily}` : BEST_KEY);
+const loadBest = (daily: string | null = null): number => {
+  try { return Number(localStorage.getItem(bestKey(daily))) || 0; } catch { return 0; }
 };
+
+function today(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** Seeded generator (mulberry32 over an FNV-1a hash), so a date gives everyone the same trays. */
+function seeded(seed: string): () => number {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619);
+  let a = h >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Tray number n for the given mode. Each daily tray has its own stream, so retries cannot shift later trays. */
+const makeTray = (grid: Grid, daily: string | null, n: number): Shape[] =>
+  drawTray(grid, daily ? seeded(`${daily}:${n}`) : undefined);
 
 // Visual-only: which gem colour each filled cell wears. The rules never read it.
 const PALETTE = ["#4da3ff", "#9a7bff", "#ff6f9c", "#ffb04d", "#3fd6a0", "#3fd0e8", "#ff7a5c", "#a6e05a"];
@@ -30,12 +56,12 @@ let colorGrid = blankColors();
 let pop = blankPop();
 let startBest = loadBest();
 
-function newState(): State {
+function newState(daily: string | null = null): State {
   colorGrid = blankColors();
   pop = blankPop();
-  startBest = loadBest();
+  startBest = loadBest(daily);
   const grid = emptyGrid();
-  return { grid, tray: drawTray(grid), score: 0, best: loadBest(), combo: 0, over: false };
+  return { grid, tray: makeTray(grid, daily, 0), score: 0, best: loadBest(daily), combo: 0, over: false, daily, trays: 1 };
 }
 
 // ---- Saving a game in progress ------------------------------------------------
@@ -49,6 +75,8 @@ function save(): void {
       t: state.tray.map((s) => (s ? shapeIndex(s) : -1)),
       s: state.score,
       c: state.combo,
+      d: state.daily,
+      n: state.trays,
       k: colorGrid.flat().map((v) => (v < 0 ? "-" : String(v))).join(""),
     }));
   } catch { /* ignore */ }
@@ -58,7 +86,7 @@ function load(): State | null {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
-    const d = JSON.parse(raw) as { g: string; t: number[]; s: number; c: number; k?: string };
+    const d = JSON.parse(raw) as { g: string; t: number[]; s: number; c: number; k?: string; d?: string | null; n?: number };
     if (typeof d?.g !== "string" || d.g.length !== SIZE * SIZE || !Array.isArray(d.t)) return null;
     const grid = Array.from({ length: SIZE }, (_, r) =>
       Array.from({ length: SIZE }, (_, c) => d.g[r * SIZE + c] === "1"));
@@ -71,8 +99,12 @@ function load(): State | null {
         return Number.isInteger(v) && v >= 0 && v < PALETTE.length ? v : 0;
       }));
     pop = blankPop();
-    startBest = loadBest();
-    return { grid, tray, score: Number(d.s) || 0, best: loadBest(), combo: Number(d.c) || 0, over: false };
+    const daily = typeof d.d === "string" ? d.d : null;
+    startBest = loadBest(daily);
+    return {
+      grid, tray, score: Number(d.s) || 0, best: loadBest(daily), combo: Number(d.c) || 0, over: false,
+      daily, trays: Number(d.n) || 1,
+    };
   } catch {
     return null;
   }
@@ -124,14 +156,21 @@ function slotRect(i: number): { x: number; y: number; size: number } {
 const MUTE_R = 14;
 const muteCenter = (): [number, number] => [W - 26, 70];
 
-let overPress: "share" | "again" | null = null;
+let overPress: "share" | "again" | "mode" | null = null;
 let sharedAt = -10; // clock time of the last "copied" confirmation
 
-const hitsShare = (x: number, y: number): boolean =>
-  Math.abs(x - W / 2) <= 96 && y >= H / 2 + 104 && y <= H / 2 + 156;
+function overHit(x: number, y: number): "share" | "again" | "mode" {
+  if (Math.abs(x - W / 2) <= 96) {
+    if (y >= H / 2 + 104 && y <= H / 2 + 156) return "share";
+    if (y >= H / 2 + 160 && y <= H / 2 + 212) return "mode";
+  }
+  return "again";
+}
 
 async function shareScore(): Promise<void> {
-  const text = `I scored ${state.score} in Block Puzzle. Can you beat it?`;
+  const text = state.daily
+    ? `Block Puzzle daily ${state.daily}: I scored ${state.score}. Can you beat it?`
+    : `I scored ${state.score} in Block Puzzle. Can you beat it?`;
   const url = location.origin;
   try {
     if (navigator.share) {
@@ -147,8 +186,8 @@ async function shareScore(): Promise<void> {
   }
 }
 
-function reset(): void {
-  state = newState();
+function reset(daily: string | null = null): void {
+  state = newState(daily);
   shownScore = 0;
   clears = []; particles = []; floaters = []; returning = [];
   overT = 0;
@@ -184,7 +223,7 @@ canvas.addEventListener("pointerdown", (e) => {
   if (Math.hypot(e.clientX - mx, e.clientY - my) <= MUTE_R + 6) { toggleMute(); return; }
   if (state.over) {
     // Act on release, not press: share() needs a completed gesture on iOS.
-    if (overT >= 0.6) overPress = hitsShare(e.clientX, e.clientY) ? "share" : "again";
+    if (overT >= 0.6) overPress = overHit(e.clientX, e.clientY);
     return;
   }
   if (drag) return;
@@ -203,9 +242,10 @@ canvas.addEventListener("pointerup", (e) => {
   if (overPress && state.over) {
     const want = overPress;
     overPress = null;
-    const onShare = hitsShare(e.clientX, e.clientY);
-    if (want === "share" && onShare) void shareScore();
-    else if (want === "again" && !onShare) reset();
+    if (overHit(e.clientX, e.clientY) !== want) return;
+    if (want === "share") void shareScore();
+    else if (want === "mode") reset(state.daily ? null : today());
+    else reset(state.daily);
     return;
   }
   if (!drag || e.pointerId !== drag.pointerId) return;
@@ -259,10 +299,10 @@ canvas.addEventListener("pointerup", (e) => {
     state.score += res.points;
     state.combo = res.combo;
     state.tray[drag.slot] = null;
-    if (state.tray.every((s) => s === null)) state.tray = drawTray(state.grid);
+    if (state.tray.every((s) => s === null)) state.tray = makeTray(state.grid, state.daily, state.trays++);
     if (state.score > state.best) {
       state.best = state.score;
-      try { localStorage.setItem(BEST_KEY, String(state.best)); } catch { /* ignore */ }
+      try { localStorage.setItem(bestKey(state.daily), String(state.best)); } catch { /* ignore */ }
     }
     const remaining = state.tray.filter((s): s is Shape => s !== null);
     if (!hasMoves(state.grid, remaining)) { state.over = true; overT = 0; sfx.gameOver(); }
@@ -371,8 +411,8 @@ function label(text: string, x: number, y: number, align: CanvasTextAlign): void
 }
 
 function drawHud(): void {
-  label("SCORE", 22, 20, "left");
-  label("BEST", W - 22, 20, "right");
+  label(state.daily ? "DAILY" : "SCORE", 22, 20, "left");
+  label(state.daily ? "BEST TODAY" : "BEST", W - 22, 20, "right");
   ctx.fillStyle = COLORS.text;
   ctx.font = `700 30px ${FONT}`;
   ctx.textAlign = "left";
@@ -594,14 +634,14 @@ function render(dt: number): void {
     ctx.globalAlpha = e;
     ctx.translate(W / 2, H / 2 + (1 - e) * 24);
     const cw = Math.min(W - 48, 320);
-    const card = ctx.createLinearGradient(0, -145, 0, 165);
+    const card = ctx.createLinearGradient(0, -145, 0, 225);
     card.addColorStop(0, "#222840");
     card.addColorStop(1, "#151a2a");
     ctx.shadowColor = "rgba(0,0,0,0.6)";
     ctx.shadowBlur = 40;
     ctx.fillStyle = card;
     ctx.beginPath();
-    ctx.roundRect(-cw / 2, -145, cw, 310, 26);
+    ctx.roundRect(-cw / 2, -145, cw, 370, 26);
     ctx.fill();
     ctx.shadowBlur = 0;
     ctx.strokeStyle = "rgba(255,255,255,0.09)";
@@ -639,6 +679,10 @@ function render(dt: number): void {
     ctx.fillStyle = clock - sharedAt < 1.8 ? "#7fe3a8" : COLORS.text;
     ctx.font = `600 16px ${FONT}`;
     ctx.fillText(clock - sharedAt < 1.8 ? "Copied to clipboard" : "Share score", 0, 131);
+
+    ctx.fillStyle = COLORS.dim;
+    ctx.font = `600 15px ${FONT}`;
+    ctx.fillText(state.daily ? "Play a random game" : "Play today\u2019s daily", 0, 186);
     ctx.restore();
   }
 }
