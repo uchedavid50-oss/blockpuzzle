@@ -1,17 +1,20 @@
 import { PERFECT_BONUS, REGION_COUNT, REGION_H, REGION_W, SIZE, canPlace, canPlaceAnywhere, clearCells, clearedCells, emptyGrid, fullestLine, hasMoves, isEmpty, place, regionCells, regionOf, shapeSize, type Grid, type Shape } from "./board";
 import { drawTray, shapeAt, shapeIndex } from "./pieces";
-import { challengeUrl, parseChallenge, randomSeed, type Challenge } from "./challenge";
+import { challengeUrl, randomSeed, type Challenge } from "./challenge";
 import { goalReached, goalText, goalValue, makeLevel, starsFor } from "./journey";
-import { BUCKET_LABELS, scoreBucket, timeUntilMidnight } from "./meta";
+import { scoreBucket, timeUntilMidnight } from "./meta";
 import { seeded } from "./rng";
 import { boardEmoji, shareText } from "./share";
-import { addDays, applyPlay, currentStreak, freezeAvailable, weekId, type StreakRec } from "./streak";
+import { weekId } from "./streak";
 import { blankRun, recordMove, weeklyDone, weeklyFailed, weeklyFor, weeklySeed, weeklyValue, type WeeklyRun } from "./weekly";
 import { haptic, haptics } from "./haptics";
 import { isMuted, sfx, soundState, toggleMute, unlock } from "./sound";
 
-const canvas = document.getElementById("game") as HTMLCanvasElement;
-const ctx = canvas.getContext("2d")!;
+import { canvas, ctx, W, H, dpr, cell, boardX, boardY, trayY, trayCell, COLORS, FONT, reduceMotion, layoutView, setReduceMotion, block, emptyCell, drawShape, drawCentered, easeOutBack, label, pill } from "./gfx";
+import { BADGES, PALETTE, THEMES, badgesSeen, bumpStreak, checkBadges, cycleTheme, has, markBadgesSeen, markThemeShown, perkUndos, playedDailyToday, saveStats, stats, streakNow, themeIdx, themeShownAt, today, toasts, unlocked } from "./progress";
+import { clearOfficial, markWeeklyCompleted, officialResult, parFor, readJourney, saveOfficial, weeklyCompleted, writeJourney } from "./records";
+import { CARD_H, HINT_KEY, MODES_H, PRAISE, TABS, archiveDates, badgeCell, chHit, drawChallengeIntro, drawHint, drawModes, drawPraise, drawSettings, drawStats, drawToast, modesLayout, settingsLayout, settingsTap, statsLayout, tabRect, ui, type Praise } from "./overlays";
+import { settings } from "./settings";
 
 interface State {
   grid: Grid;
@@ -39,6 +42,8 @@ interface State {
 type Kind = "classic" | "zen" | "weekly" | "journey";
 interface GameOpts { daily?: string | null; ch?: Challenge | null; kind?: Kind; level?: number }
 
+setReduceMotion(settings.reduce);
+
 const BEST_KEY = "blockpuzzle.best";
 const SAVE_KEY = "blockpuzzle.save";
 
@@ -47,184 +52,9 @@ const loadBest = (daily: string | null = null): number => {
   try { return Number(localStorage.getItem(bestKey(daily))) || 0; } catch { return 0; }
 };
 
-function dateStr(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-const today = (): string => dateStr(new Date());
-
-// ---- Lifetime stats and milestone badges (device-local) -------------------------
-
-interface Stats {
-  games: number; finished: number; total: number; bestScore: number; bestCombo: number;
-  lines: number; perfects: number; moves: number; bestStreak: number; challengesWon: number;
-  zenLines: number; levels: number; weeklyWins: number; hist: number[];
-}
-const STATS_KEY = "blockpuzzle.stats";
-const BADGES_KEY = "blockpuzzle.badges";
-const SEEN_KEY = "blockpuzzle.badgesSeen";
-const blankStats = (): Stats => ({ games: 0, finished: 0, total: 0, bestScore: 0, bestCombo: 0, lines: 0, perfects: 0, moves: 0, bestStreak: 0, challengesWon: 0, zenLines: 0, levels: 0, weeklyWins: 0, hist: [0, 0, 0, 0, 0, 0] });
-const stats: Stats = (() => {
-  try {
-    const d = JSON.parse(localStorage.getItem(STATS_KEY) ?? "null") as Partial<Stats> | null;
-    return { ...blankStats(), ...(d ?? {}) };
-  } catch { return blankStats(); }
-})();
-const saveStats = (): void => {
-  try { localStorage.setItem(STATS_KEY, JSON.stringify(stats)); } catch { /* ignore */ }
-};
-
-const unlocked: string[] = (() => {
-  try {
-    const d = JSON.parse(localStorage.getItem(BADGES_KEY) ?? "[]") as unknown;
-    return Array.isArray(d) ? d.filter((x): x is string => typeof x === "string") : [];
-  } catch { return []; }
-})();
-let badgesSeen = (() => { try { return Number(localStorage.getItem(SEEN_KEY)) || 0; } catch { return 0; } })();
-
-interface MoveInfo { lines: number; combo: number; perfect: boolean; regions: number }
-interface Badge {
-  id: string; name: string; desc: string; ok: (m: MoveInfo | null) => boolean;
-  progress?: () => [number, number]; // [now, target], shown as a bar while locked
-  reward?: string;
-}
-const BADGES: Badge[] = [
-  { id: "first", name: "First clear", desc: "Clear your first line.", ok: () => stats.lines >= 1 },
-  { id: "double", name: "Double", desc: "Clear 2 lines with one piece.", ok: (m) => !!m && m.lines >= 2 },
-  { id: "quad", name: "Quad", desc: "Clear 4 lines with one piece.", ok: (m) => !!m && m.lines >= 4, reward: "Gold confetti" },
-  { id: "combo3", name: "On a roll", desc: "Reach a 3x combo.", ok: () => stats.bestCombo >= 3, progress: () => [stats.bestCombo, 3], reward: "Sparkle trail on held pieces" },
-  { id: "combo5", name: "Unstoppable", desc: "Reach a 5x combo.", ok: () => stats.bestCombo >= 5, progress: () => [stats.bestCombo, 5], reward: "Rainbow rings" },
-  { id: "combo8", name: "Untouchable", desc: "Reach an 8x combo.", ok: () => stats.bestCombo >= 8, progress: () => [stats.bestCombo, 8] },
-  { id: "s500", name: "Sharp", desc: "Score 500 in one game.", ok: () => stats.bestScore >= 500, progress: () => [stats.bestScore, 500] },
-  { id: "s1000", name: "Pro", desc: "Score 1,000 in one game.", ok: () => stats.bestScore >= 1000, progress: () => [stats.bestScore, 1000], reward: "Gold theme" },
-  { id: "s2500", name: "Legend", desc: "Score 2,500 in one game.", ok: () => stats.bestScore >= 2500, progress: () => [stats.bestScore, 2500] },
-  { id: "s5000", name: "Mythic", desc: "Score 5,000 in one game.", ok: () => stats.bestScore >= 5000, progress: () => [stats.bestScore, 5000] },
-  { id: "lines50", name: "Sweeper", desc: "Clear 50 lines in total.", ok: () => stats.lines >= 50, progress: () => [stats.lines, 50] },
-  { id: "lines250", name: "Demolition", desc: "Clear 250 lines in total.", ok: () => stats.lines >= 250, progress: () => [stats.lines, 250] },
-  { id: "lines1000", name: "Annihilator", desc: "Clear 1,000 lines in total.", ok: () => stats.lines >= 1000, progress: () => [stats.lines, 1000] },
-  { id: "games10", name: "Hooked", desc: "Play 10 games.", ok: () => stats.games >= 10, progress: () => [stats.games, 10] },
-  { id: "streak3", name: "Regular", desc: "Play the daily 3 days in a row.", ok: () => stats.bestStreak >= 3, progress: () => [stats.bestStreak, 3] },
-  { id: "streak7", name: "Devoted", desc: "Play the daily 7 days in a row.", ok: () => stats.bestStreak >= 7, progress: () => [stats.bestStreak, 7], reward: "Aurora theme" },
-  { id: "streak30", name: "Marathon", desc: "Play the daily 30 days in a row.", ok: () => stats.bestStreak >= 30, progress: () => [stats.bestStreak, 30] },
-  { id: "region", name: "Squared away", desc: "Clear a 2\u00D74 block.", ok: (m) => !!m && m.regions >= 1 },
-  { id: "weekly1", name: "Challenger", desc: "Complete a weekly challenge.", ok: () => stats.weeklyWins >= 1 },
-  { id: "journey5", name: "Explorer", desc: "Clear 5 journey levels.", ok: () => stats.levels >= 5, progress: () => [stats.levels, 5] },
-  { id: "zen50", name: "Calm mind", desc: "Clear 50 lines in zen mode.", ok: () => stats.zenLines >= 50, progress: () => [stats.zenLines, 50] },
-  { id: "rival", name: "Rival", desc: "Beat a friend's challenge score.", ok: () => stats.challengesWon >= 1 },
-  { id: "perfect", name: "Spotless", desc: "Clear the entire board.", ok: () => stats.perfects >= 1, reward: "Midnight theme" },
-];
-
-const has = (id: string): boolean => unlocked.includes(id);
-
-// The collection: a 4x4 picture that fills in as you play. Every 40 lines, 5 journey levels or
-// a weekly win reveals a tile (a win is worth two); completing it unlocks the Prism theme.
-const COLLECTION_SIZE = 16;
-const TILE_ORDER = [5, 10, 0, 15, 6, 9, 3, 12, 1, 14, 2, 13, 4, 11, 7, 8];
-const collectionTiles = (): number =>
-  Math.min(COLLECTION_SIZE, Math.floor(stats.lines / 40) + Math.floor(stats.levels / 5) + stats.weeklyWins * 2);
-const TILES_KEY = "blockpuzzle.tilesSeen";
-function checkCollection(): void {
-  const now = collectionTiles();
-  let seen = 0;
-  try { seen = Number(localStorage.getItem(TILES_KEY)) || 0; } catch { /* ignore */ }
-  if (now <= seen) return;
-  try { localStorage.setItem(TILES_KEY, String(now)); } catch { /* ignore */ }
-  toasts.push(now >= COLLECTION_SIZE
-    ? { title: "Collection complete", desc: "Unlocked: Prism theme", t: 0, label: "COLLECTION" }
-    : { title: "New collection tile", desc: `${now} of ${COLLECTION_SIZE} revealed`, t: 0, label: "COLLECTION" });
-  sfx.praise(1);
-}
-/** Every 5 badges earns one extra undo at the start of each random (non-daily) game, up to +2. */
-const perkUndos = (): number => Math.min(2, Math.floor(unlocked.length / 5));
-const RANKS: [number, string][] = [[0, "Rookie"], [1, "Beginner"], [3, "Player"], [6, "Skilled"], [9, "Expert"], [12, "Master"], [16, "Grandmaster"]];
-const rankName = (): string => [...RANKS].reverse().find(([n]) => unlocked.length >= n)![1];
-
-interface Toast { title: string; desc: string; t: number; label?: string }
-let toasts: Toast[] = [];
-
-/** Unlocks any badge whose condition now holds and queues a pop-up for each. */
-function checkBadges(m: MoveInfo | null): void {
-  checkCollection();
-  let any = false;
-  for (const b of BADGES) {
-    if (unlocked.includes(b.id) || !b.ok(m)) continue;
-    const before = perkUndos();
-    unlocked.push(b.id);
-    toasts.push({ title: b.name, desc: b.reward ? `Unlocked: ${b.reward}` : b.desc, t: 0 });
-    if (perkUndos() > before) toasts.push({ title: "Extra undo earned", desc: "Random games now start with more undos.", t: 0, label: "PERK EARNED" });
-    any = true;
-  }
-  if (!any) return;
-  try { localStorage.setItem(BADGES_KEY, JSON.stringify(unlocked)); } catch { /* ignore */ }
-  sfx.praise(1);
-  haptic([15, 30, 15]);
-}
-
-// Consecutive days on which a daily game was started. Device-local; no backend.
-// One missed day is bridged by a weekly freeze (see streak.ts).
-const STREAK_KEY = "blockpuzzle.streak";
-function readStreak(): StreakRec | null {
-  try {
-    const d = JSON.parse(localStorage.getItem(STREAK_KEY) ?? "null") as Partial<StreakRec> | null;
-    return d && typeof d.last === "string" && typeof d.n === "number"
-      ? { last: d.last, n: d.n, ...(typeof d.freezeWeek === "string" ? { freezeWeek: d.freezeWeek } : {}) } : null;
-  } catch { return null; }
-}
-const streakNow = (): number => currentStreak(readStreak(), today());
-function bumpStreak(): void {
-  const before = readStreak();
-  const { rec, saved } = applyPlay(before, today());
-  if (rec === before) return;
-  try { localStorage.setItem(STREAK_KEY, JSON.stringify(rec)); } catch { /* ignore */ }
-  stats.bestStreak = Math.max(stats.bestStreak, rec.n);
-  saveStats();
-  if (saved) toasts.push({ title: "Streak saved", desc: "Your weekly freeze covered the day you missed.", t: 0, label: "STREAK FREEZE" });
-  checkBadges(null);
-}
-const playedDailyToday = (): boolean => readStreak()?.last === today();
-
 /** Tray number n for the given mode. Each daily tray has its own stream, so retries cannot shift later trays. */
 const makeTray = (grid: Grid, seed: string, n: number): Shape[] => drawTray(grid, seeded(`${seed}:${n}`));
 
-// Visual-only: which gem colour each filled cell wears. The rules never read it.
-const THEMES: { name: string; colors: string[]; req?: string }[] = [
-  { name: "Gems", colors: ["#4da3ff", "#9a7bff", "#ff6f9c", "#ffb04d", "#3fd6a0", "#3fd0e8", "#ff7a5c", "#a6e05a"] },
-  { name: "Neon", colors: ["#00e5ff", "#ff2bd6", "#b6ff00", "#ff7a00", "#8a5cff", "#00ff9d", "#ff3355", "#ffee00"] },
-  { name: "Pastel", colors: ["#8ecae6", "#c3a6ff", "#ffadc6", "#ffd6a5", "#9be3c0", "#a0e7f0", "#ffb5a7", "#d4e79e"] },
-  // Okabe-Ito: chosen to stay distinguishable with the common kinds of colour blindness.
-  { name: "Gold", req: "s1000", colors: ["#ffd75e", "#ff9f43", "#f6c177", "#e8b4a0", "#c9a227", "#ffe9a0", "#d4884a", "#b8860b"] },
-  { name: "Aurora", req: "streak7", colors: ["#3ef5c0", "#4ad1ff", "#7c6bff", "#c45bff", "#ff6bd6", "#57ffa0", "#39b3ff", "#a2ff5e"] },
-  { name: "Prism", req: "collection", colors: ["#ff4d6d", "#ff9f1c", "#ffe14d", "#5ce65c", "#2ec4b6", "#4d8cff", "#9b5cff", "#ff5cc8"] },
-  { name: "Midnight", req: "perfect", colors: ["#5b7cff", "#8a5bff", "#2ec8ff", "#ff4fa3", "#31e6c1", "#ffd34f", "#7aa2ff", "#c06bff"] },
-  { name: "Colour-blind", colors: ["#0072b2", "#e69f00", "#56b4e9", "#009e73", "#f0e442", "#d55e00", "#cc79a7", "#999999"] },
-];
-const THEME_KEY = "blockpuzzle.theme";
-const PALETTE: string[] = [...THEMES[0]!.colors]; // mutated in place when the theme changes
-let themeIdx = 0;
-let themeShownAt = -10;
-const themeUnlocked = (i: number): boolean => {
-  const req = THEMES[i]!.req;
-  return !req || (req === "collection" ? collectionTiles() >= COLLECTION_SIZE : has(req));
-};
-/** Next theme you have unlocked, wrapping around. */
-function cycleTheme(): void {
-  for (let k = 1; k <= THEMES.length; k++) {
-    const i = (themeIdx + k) % THEMES.length;
-    if (themeUnlocked(i)) { applyTheme(i); return; }
-  }
-}
-function applyTheme(i: number): void {
-  themeIdx = ((i % THEMES.length) + THEMES.length) % THEMES.length;
-  if (!themeUnlocked(themeIdx)) themeIdx = 0;
-  PALETTE.splice(0, PALETTE.length, ...THEMES[themeIdx]!.colors);
-  try { localStorage.setItem(THEME_KEY, THEMES[themeIdx]!.name); } catch { /* ignore */ }
-}
-try {
-  // Saved by name. Older versions saved a position (0-3), where 3 was the colour-blind palette.
-  const saved = localStorage.getItem(THEME_KEY) ?? "";
-  const byName = THEMES.findIndex((t) => t.name === saved);
-  applyTheme(byName >= 0 ? byName : saved === "3" ? THEMES.findIndex((t) => t.name === "Colour-blind") : Number(saved) || 0);
-} catch { /* ignore */ }
 const blankColors = (): number[][] => Array.from({ length: SIZE }, () => Array<number>(SIZE).fill(-1));
 const blankPop = (): number[][] => Array.from({ length: SIZE }, () => Array<number>(SIZE).fill(0));
 const colorIndex = (shape: Shape): number => shapeIndex(shape) % PALETTE.length;
@@ -263,34 +93,11 @@ function newState(o: GameOpts = {}): State {
   };
 }
 
-// ---- The daily's official result and par ----------------------------------------
-// The first attempt at a given day is the record, and the only one that is shared as the result.
-// Later attempts at that date are practice.
-
-interface Official { score: number; board: string; abandoned?: boolean }
-const officialKey = (date: string): string => `blockpuzzle.official.${date}`;
-function officialResult(date: string): Official | null {
-  try {
-    const d = JSON.parse(localStorage.getItem(officialKey(date)) ?? "null") as Official | null;
-    return d && typeof d.score === "number" && typeof d.board === "string" ? d : null;
-  } catch { return null; }
-}
+/** Records today's first attempt (see records.ts). `abandoned` marks one walked away from mid-game. */
 function recordOfficial(abandoned: boolean): void {
   if (!state.daily || state.practice || officialResult(state.daily)) return;
-  try {
-    localStorage.setItem(officialKey(state.daily), JSON.stringify({ score: state.score, board: boardEmoji(state.grid, colorGrid), ...(abandoned ? { abandoned: true } : {}) }));
-  } catch { /* ignore */ }
+  saveOfficial(state.daily, { score: state.score, board: boardEmoji(state.grid, colorGrid), ...(abandoned ? { abandoned: true } : {}) });
 }
-function clearOfficial(date: string): void {
-  try { localStorage.removeItem(officialKey(date)); } catch { /* ignore */ }
-}
-
-/** Par for each date, from a greedy bot run offline (scripts/make-par.ts). Missing days just show no par. */
-let parMap: Record<string, number> = {};
-fetch("/par.json").then((r) => (r.ok ? r.json() : null)).then((d: unknown) => {
-  if (d && typeof d === "object") parMap = d as Record<string, number>;
-}).catch(() => { /* offline or missing: no par */ });
-const parFor = (date: string | null): number | null => (date && parMap[date] ? parMap[date]! : null);
 
 // ---- Saving a game in progress ------------------------------------------------
 // Shapes are stored as catalogue indices; the grid as one 64-char string of 0/1.
@@ -357,7 +164,6 @@ function load(): State | null {
 }
 
 let state: State = load() ?? newState();
-const HINT_KEY = "blockpuzzle.hintSeen";
 
 // ---- Transient effects (purely visual; never affect game logic) ---------------
 
@@ -365,36 +171,12 @@ interface ClearCell { r: number; c: number; ci: number; delay: number; fired: bo
 interface Clear { cells: ClearCell[]; t: number; lines: number; count: number }
 interface Ring { x: number; y: number; t: number; max: number; color: string; w: number }
 let rings: Ring[] = [];
-interface Praise { text: string; t: number; level: number }
 let praises: Praise[] = [];
-const PRAISE = ["Nice!", "Great!", "Awesome!", "Fantastic!", "Unreal!", "Perfect!"];
-const PRAISE_COLORS = ["#7fe3a8", "#5ec8ff", "#ffc555", "#ff8a5c", "#ff5fa8", "#ffe27a"];
 let flash = 0; // full-screen white pulse on big clears
 let jellyAmp = 0; // the board wobbles after a clear
 let jellyT = 0;
 let idleT = 0; // seconds since the player last did anything
 let challengeBeaten = state.challenge !== null && state.score > state.challenge;
-// Opened from a friend's link: offer the challenge before touching the current game.
-let chIntro: Challenge | null = (() => {
-  try {
-    const c = parseChallenge(location.search);
-    if (c) history.replaceState(null, "", location.pathname);
-    return c;
-  } catch { return null; }
-})();
-let chPress: "play" | "skip" | null = null;
-let chT = 0;
-const chHit = (x: number, y: number): "play" | "skip" | null =>
-  Math.abs(x - W / 2) <= 100 && y >= H / 2 + 66 && y <= H / 2 + 126 ? "play"
-  : Math.abs(x - W / 2) <= 100 && y >= H / 2 + 132 && y <= H / 2 + 176 ? "skip" : null;
-let modesOn = false;
-let modesView: "main" | "archive" = "main";
-let modesT = 0;
-let modesPress: { x: number; y: number } | null = null;
-let statsOn = false;
-let statsT = 0;
-let statsPress: { x: number; y: number } | null = null;
-let badgeSel = -1;
 let gameCounted = state.score > 0; // this game has been added to the games-played count
 let banked: number | null = null; // final score already added to the lifetime total (null = not yet)
 let scorePulse = 0;
@@ -412,21 +194,8 @@ let shownScore = state.score; // the HUD number counts up toward state.score
 
 // ---- Layout, recomputed on resize ---------------------------------------------
 
-let dpr = 1, W = 0, H = 0, cell = 0, boardX = 0, boardY = 0, trayY = 0, trayCell = 0;
 function layout(): void {
-  dpr = window.devicePixelRatio || 1;
-  W = window.innerWidth;
-  H = window.innerHeight;
-  canvas.width = W * dpr;
-  canvas.height = H * dpr;
-  canvas.style.width = `${W}px`;
-  canvas.style.height = `${H}px`;
-  const top = 108;
-  cell = Math.floor(Math.min(W - 44, (H - top) * 0.6) / SIZE);
-  boardX = Math.floor((W - cell * SIZE) / 2);
-  boardY = top;
-  trayCell = Math.floor(Math.min(cell * 0.6, (W - 48) / 15));
-  trayY = boardY + cell * SIZE + (H - boardY - cell * SIZE) / 2 - trayCell * 1.5;
+  layoutView(SIZE);
 }
 
 /** Top-left of tray slot i (slot is a 5x5 trayCell box). */
@@ -492,11 +261,6 @@ function startGame(o: GameOpts): void {
 
 let moves = 0; // placements this session, to time the install nudge
 let overPress: "share" | "again" | "mode" | "undo" | null = null;
-let hintOn = (() => {
-  try { return localStorage.getItem(HINT_KEY) !== "1"; } catch { return false; }
-})();
-let hintT = 0;
-let hintPress = false;
 let sharedAt = -10; // clock time of the last "copied" confirmation
 
 function overHit(x: number, y: number): "share" | "again" | "mode" | "undo" {
@@ -574,7 +338,7 @@ function trackModes(m: { lines: number; cells: number; points: number }): void {
       haptics.invalid();
     }
     if (weeklyDone(w, state.wk) && !weeklyCompleted(state.week)) {
-      try { localStorage.setItem(`blockpuzzle.weekly.${state.week}`, "1"); } catch { /* ignore */ }
+      markWeeklyCompleted(state.week);
       stats.weeklyWins++;
       saveStats();
       praises.push({ text: "Complete!", t: 0, level: 5 });
@@ -604,23 +368,6 @@ function trackModes(m: { lines: number; cells: number; points: number }): void {
       checkBadges(null);
     }
   }
-}
-
-const weeklyCompleted = (week: string): boolean => {
-  try { return localStorage.getItem(`blockpuzzle.weekly.${week}`) === "1"; } catch { return false; }
-};
-
-// Journey progress: the next level to play, and the best stars on each level cleared.
-interface JourneyData { next: number; stars: Record<number, number> }
-const JOURNEY_KEY = "blockpuzzle.journey";
-function readJourney(): JourneyData {
-  try {
-    const d = JSON.parse(localStorage.getItem(JOURNEY_KEY) ?? "null") as Partial<JourneyData> | null;
-    return { next: Math.max(1, Number(d?.next) || 1), stars: d?.stars && typeof d.stars === "object" ? d.stars : {} };
-  } catch { return { next: 1, stars: {} }; }
-}
-function writeJourney(j: JourneyData): void {
-  try { localStorage.setItem(JOURNEY_KEY, JSON.stringify(j)); } catch { /* ignore */ }
 }
 
 /** Ends a game that has run out of moves, banking its stats. */
@@ -663,6 +410,17 @@ function easeZen(): boolean {
   return true;
 }
 
+function pickMode(i: number): void {
+  haptics.tick();
+  if (i === 5) { ui.modesView = "archive"; return; }
+  ui.modesOn = false;
+  if (i === 0) startGame({});
+  else if (i === 1) startGame({ daily: today() });
+  else if (i === 2) startGame({ kind: "weekly" });
+  else if (i === 3) startGame({ kind: "journey", level: readJourney().next });
+  else startGame({ kind: "zen" });
+}
+
 // ---- Drag ----------------------------------------------------------------------
 
 interface Drag { slot: number; shape: Shape; px: number; py: number; pointerId: number; touch: boolean; k: number; vx: number }
@@ -691,24 +449,24 @@ canvas.addEventListener("pointerdown", (e) => {
   idleT = 0;
   const [mx, my] = muteCenter();
   if (Math.hypot(e.clientX - mx, e.clientY - my) <= MUTE_R + 6) { toggleMute(); return; }
-  if (hintOn) { hintPress = true; return; }
-  if (chIntro) { chPress = chHit(e.clientX, e.clientY); return; }
-  if (statsOn) { statsPress = { x: e.clientX, y: e.clientY }; return; }
-  if (modesOn) { modesPress = { x: e.clientX, y: e.clientY }; return; }
+  if (ui.hintOn) { ui.hintPress = true; return; }
+  if (ui.chIntro) { ui.chPress = chHit(e.clientX, e.clientY); return; }
+  if (ui.statsOn) { ui.statsPress = { x: e.clientX, y: e.clientY }; return; }
+  if (ui.settingsOn) { ui.settingsPress = { x: e.clientX, y: e.clientY }; return; }
+  if (ui.modesOn) { ui.modesPress = { x: e.clientX, y: e.clientY }; return; }
   if (state.over) {
     // Act on release, not press: share() needs a completed gesture on iOS.
     if (overT >= 0.6) overPress = overHit(e.clientX, e.clientY);
     return;
   }
   if (state.combo < 2 && Math.hypot(e.clientX - W / 2, e.clientY - 30) <= 20) {
-    statsOn = true; statsT = 0; badgeSel = -1; badgesSeen = unlocked.length;
-    try { localStorage.setItem(SEEN_KEY, String(badgesSeen)); } catch { /* ignore */ }
+    ui.statsOn = true; ui.statsT = 0; ui.badgeSel = -1; markBadgesSeen();
     haptics.tick();
     return;
   }
   const [tx, ty] = THEME_C();
-  if (Math.hypot(e.clientX - tx, e.clientY - ty) <= 19) { cycleTheme(); themeShownAt = clock; haptics.tick(); return; }
-  if (inRect(CHIP, e.clientX, e.clientY)) { modesOn = true; modesView = "main"; modesT = 0; haptics.tick(); return; }
+  if (Math.hypot(e.clientX - tx, e.clientY - ty) <= 19) { cycleTheme(); markThemeShown(clock); haptics.tick(); return; }
+  if (inRect(CHIP, e.clientX, e.clientY)) { ui.modesOn = true; ui.modesView = "main"; ui.modesT = 0; haptics.tick(); return; }
   if (canUndo() && inRect(undoRect(), e.clientX, e.clientY)) { undo(); return; }
   if (drag) return;
   const slot = slotAt(e.clientX, e.clientY);
@@ -729,31 +487,44 @@ canvas.addEventListener("pointermove", (e) => {
 });
 
 canvas.addEventListener("pointerup", (e) => {
-  if (chPress && chIntro) {
-    const want = chPress;
-    const ch = chIntro;
-    chPress = null;
+  if (ui.settingsPress) {
+    const down = ui.settingsPress;
+    ui.settingsPress = null;
+    if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 12) return;
+    const l = settingsLayout();
+    if (settingsTap((e.clientX - W / 2) / l.k, (e.clientY - H / 2) / l.k)) ui.settingsOn = false;
+    return;
+  }
+  if (ui.chPress && ui.chIntro) {
+    const want = ui.chPress;
+    const ch = ui.chIntro;
+    ui.chPress = null;
     if (chHit(e.clientX, e.clientY) !== want) return;
-    chIntro = null;
-    chT = 0;
+    ui.chIntro = null;
+    ui.chT = 0;
     if (want === "play") reset({ ch });
     return;
   }
-  if (modesPress) {
-    const down = modesPress;
-    modesPress = null;
+  if (ui.modesPress) {
+    const down = ui.modesPress;
+    ui.modesPress = null;
     if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 12) return;
     const l = modesLayout();
     const lx = (e.clientX - W / 2) / l.k;
     const ly = (e.clientY - H / 2) / l.k;
     const inCard = Math.abs(lx) <= l.cw / 2 && Math.abs(ly) <= MODES_H / 2;
-    if (!inCard) { modesOn = false; return; }
-    if (ly >= 232 && ly <= 280 && Math.abs(lx) <= 90) {
-      if (modesView === "archive") modesView = "main"; else modesOn = false;
+    if (!inCard) { ui.modesOn = false; return; }
+    if (ui.modesView === "main" && Math.hypot(lx - (l.cw / 2 - 38), ly + 251) <= 22) {
+      ui.modesOn = false; ui.settingsOn = true; ui.settingsT = 0; ui.settingsNote = "";
       haptics.tick();
       return;
     }
-    if (modesView === "main") {
+    if (ly >= 232 && ly <= 280 && Math.abs(lx) <= 90) {
+      if (ui.modesView === "archive") ui.modesView = "main"; else ui.modesOn = false;
+      haptics.tick();
+      return;
+    }
+    if (ui.modesView === "main") {
       for (let i = 0; i < 6; i++) {
         const y = -200 + i * 70;
         if (ly >= y && ly <= y + 62 && Math.abs(lx) <= l.cw / 2 - 16) { pickMode(i); return; }
@@ -765,7 +536,7 @@ canvas.addEventListener("pointerup", (e) => {
         const x = -l.cw / 2 + 24 + (i % 2) * (cw2 + 10);
         const y = -200 + Math.floor(i / 2) * 58;
         if (lx >= x && lx <= x + cw2 && ly >= y && ly <= y + 50) {
-          modesOn = false;
+          ui.modesOn = false;
           startGame({ daily: dates[i]! });
           return;
         }
@@ -773,31 +544,31 @@ canvas.addEventListener("pointerup", (e) => {
     }
     return;
   }
-  if (statsPress) {
-    const down = statsPress;
-    statsPress = null;
+  if (ui.statsPress) {
+    const down = ui.statsPress;
+    ui.statsPress = null;
     const l = statsLayout();
     const lx = (e.clientX - W / 2) / l.k;
     const ly = (e.clientY - H / 2) / l.k;
     if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 12) return;
     for (let t = 0; t < TABS.length; t++) {
       const r = tabRect(t, l.cw);
-      if (lx >= r.x && lx <= r.x + r.w && ly >= r.y && ly <= r.y + r.h) { statsTab = t; badgeSel = -1; haptics.tick(); return; }
+      if (lx >= r.x && lx <= r.x + r.w && ly >= r.y && ly <= r.y + r.h) { ui.statsTab = t; ui.badgeSel = -1; haptics.tick(); return; }
     }
-    if (statsTab === 1) {
+    if (ui.statsTab === 1) {
       for (let i = 0; i < BADGES.length; i++) {
         const b = badgeCell(i, l);
-        if (lx >= b.x - b.w / 2 && lx <= b.x + b.w / 2 && ly >= b.y && ly <= b.y + 54) { badgeSel = badgeSel === i ? -1 : i; haptics.tick(); return; }
+        if (lx >= b.x - b.w / 2 && lx <= b.x + b.w / 2 && ly >= b.y && ly <= b.y + 54) { ui.badgeSel = ui.badgeSel === i ? -1 : i; haptics.tick(); return; }
       }
     }
     const inCard = Math.abs(lx) <= l.cw / 2 && ly >= -CARD_H / 2 && ly <= CARD_H / 2;
     const onClose = Math.abs(lx) <= 90 && ly >= 244 && ly <= 294;
-    if (!inCard || onClose) statsOn = false;
+    if (!inCard || onClose) ui.statsOn = false;
     return;
   }
-  if (hintPress) {
-    hintPress = false;
-    if (hintT >= 0.5) { hintOn = false; try { localStorage.setItem(HINT_KEY, "1"); } catch { /* ignore */ } }
+  if (ui.hintPress) {
+    ui.hintPress = false;
+    if (ui.hintT >= 0.5) { ui.hintOn = false; try { localStorage.setItem(HINT_KEY, "1"); } catch { /* ignore */ } }
     return;
   }
   if (overPress && state.over) {
@@ -980,83 +751,6 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) save(
 
 // ---- Rendering ------------------------------------------------------------------
 
-const COLORS = {
-  text: "#eef1f8", dim: "#7f889c", combo: "#ffc555",
-  bad: "rgba(240,90,110,0.38)",
-};
-
-const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-const FONT = "system-ui, -apple-system, 'SF Pro Display', 'Segoe UI', sans-serif";
-
-function mix(hex: string, to: number, a: number): string {
-  const n = parseInt(hex.slice(1), 16);
-  const ch = (v: number) => Math.round(v + (to - v) * a);
-  return `rgb(${ch((n >> 16) & 255)},${ch((n >> 8) & 255)},${ch(n & 255)})`;
-}
-
-/** One glossy gem block. */
-function block(x: number, y: number, s: number, hex: string): void {
-  const g = Math.max(1, s * 0.04);
-  const w = s - g * 2;
-  const rr = s * 0.22;
-  const dep = s * 0.11; // visible thickness: the block is a slab, lit from above
-  const fh = w - dep; // height of the top face
-
-  // Side wall: a darker copy sitting lower, so the face reads as raised.
-  ctx.fillStyle = mix(hex, 0, 0.5);
-  ctx.beginPath();
-  ctx.roundRect(x + g, y + g + dep, w, fh, rr);
-  ctx.fill();
-  ctx.fillStyle = "rgba(0,0,0,0.18)"; // contact shade at the base
-  ctx.beginPath();
-  ctx.roundRect(x + g, y + g + dep + fh * 0.7, w, fh * 0.3, rr);
-  ctx.fill();
-
-  // Top face.
-  const grad = ctx.createLinearGradient(x, y + g, x, y + g + fh);
-  grad.addColorStop(0, mix(hex, 255, 0.36));
-  grad.addColorStop(0.5, hex);
-  grad.addColorStop(1, mix(hex, 0, 0.14));
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.roundRect(x + g, y + g, w, fh, rr);
-  ctx.fill();
-  // bevel highlight along the top edge
-  ctx.strokeStyle = "rgba(255,255,255,0.38)";
-  ctx.lineWidth = 1.2;
-  ctx.beginPath();
-  ctx.roundRect(x + g + 0.6, y + g + 0.6, w - 1.2, fh - 1.2, rr);
-  ctx.stroke();
-  // soft gloss
-  ctx.fillStyle = "rgba(255,255,255,0.15)";
-  ctx.beginPath();
-  ctx.roundRect(x + g + w * 0.1, y + g + fh * 0.08, w * 0.8, fh * 0.36, rr * 0.8);
-  ctx.fill();
-}
-
-function emptyCell(x: number, y: number, s: number, alt = false): void {
-  const g = Math.max(1, s * 0.04);
-  const grad = ctx.createLinearGradient(x, y, x, y + s);
-  grad.addColorStop(0, alt ? "#1a2030" : "#151925");
-  grad.addColorStop(1, alt ? "#232a3d" : "#1d2230");
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.roundRect(x + g, y + g, s - g * 2, s - g * 2, s * 0.22);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.045)"; // lit lower lip
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.roundRect(x + g + 0.5, y + g + 1.5, s - g * 2 - 1, s - g * 2 - 1, s * 0.22);
-  ctx.stroke();
-}
-
-function drawShape(shape: Shape, x: number, y: number, s: number, hex: string): void {
-  for (const [r, c] of shape) block(x + c * s, y + r * s, s, hex);
-}
-
-/** Centre and cell size of the piece being dragged, easing from its tray slot up to the pointer. */
-const easeOutBack = (t: number): number => 1 + 2.70158 * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2);
-
 function dragDraw(d: Drag): { cx: number; cy: number; s: number } {
   const e = 1 - Math.pow(1 - d.k, 3);
   const slot = slotRect(d.slot);
@@ -1068,16 +762,6 @@ function dragDraw(d: Drag): { cx: number; cy: number; s: number } {
   };
 }
 
-function drawCentered(shape: Shape, cx: number, cy: number, s: number, hex: string, rot = 0): void {
-  const { rows, cols } = shapeSize(shape);
-  if (!rot) { drawShape(shape, cx - (cols * s) / 2, cy - (rows * s) / 2, s, hex); return; }
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate(rot);
-  drawShape(shape, -(cols * s) / 2, -(rows * s) / 2, s, hex);
-  ctx.restore();
-}
-
 function drawMute(): void {
   const [x, y] = muteCenter();
   ctx.fillStyle = COLORS.dim;
@@ -1085,14 +769,6 @@ function drawMute(): void {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(isMuted() ? "\u{1F507}" : "\u{1F50A}", x, y);
-}
-
-function label(text: string, x: number, y: number, align: CanvasTextAlign): void {
-  ctx.fillStyle = COLORS.dim;
-  ctx.textAlign = align;
-  ctx.textBaseline = "middle";
-  ctx.font = `600 11px ${FONT}`;
-  ctx.fillText(text, x, y);
 }
 
 function drawHud(): void {
@@ -1113,7 +789,7 @@ function drawHud(): void {
     rightValue = lv.goal.target.toLocaleString("en-US");
     hot = goalReached(lv, { score: state.score, lines: state.lines, moves: state.moves });
   } else if (wk && state.wk) {
-    leftLabel = "WEEKLY";
+    leftLabel = wk.limit ? `WEEKLY \u00B7 ${Math.max(0, wk.limit - state.wk.moves)} LEFT` : "WEEKLY";
     rightLabel = weeklyFailed(wk, state.wk) ? "RULE BROKEN" : `GOAL \u00B7 ${wk.unit.toUpperCase()}`;
     leftValue = String(weeklyValue(wk, state.wk));
     rightValue = String(wk.goal);
@@ -1174,21 +850,6 @@ function drawHud(): void {
     ctx.fillText(label, 0, 1);
     ctx.restore();
   }
-}
-
-function pill(r: { x: number; y: number; w: number; h: number }, text: string, hot: boolean): void {
-  ctx.fillStyle = hot ? "rgba(255,197,85,0.14)" : "rgba(255,255,255,0.06)";
-  ctx.beginPath();
-  ctx.roundRect(r.x, r.y, r.w, r.h, r.h / 2);
-  ctx.fill();
-  ctx.strokeStyle = hot ? "rgba(255,197,85,0.5)" : "rgba(255,255,255,0.12)";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-  ctx.fillStyle = hot ? COLORS.combo : COLORS.text;
-  ctx.font = `600 13px ${FONT}`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(text, r.x + r.w / 2, r.y + r.h / 2 + 1);
 }
 
 function drawControls(): void {
@@ -1322,10 +983,10 @@ function render(dt: number): void {
   clears = clears.filter((cl) => cl.t < 1);
   praises = praises.filter((pr) => (pr.t += dt * 0.95) < 1);
   if (toasts[0] && (toasts[0].t += dt / 3.2) >= 1) toasts.shift();
-  if (statsOn) statsT = Math.min(1, statsT + dt * 3);
+  if (ui.statsOn) ui.statsT = Math.min(1, ui.statsT + dt * 3);
   flash = Math.max(0, flash - dt * 2.6);
   jellyT += dt;
-  if (!drag && !state.over && !hintOn) idleT += dt; else idleT = 0;
+  if (!drag && !state.over && !ui.hintOn) idleT += dt; else idleT = 0;
   if (drag) drag.vx *= Math.max(0, 1 - dt * 9);
   for (const r of rings) r.t += dt * 2.4;
   rings = rings.filter((r) => r.t < 1);
@@ -1629,661 +1290,11 @@ function render(dt: number): void {
   }
 
   for (const t of toasts.slice(0, 1)) drawToast(t);
-  if (chIntro && !hintOn) drawChallengeIntro(dtLast);
-  if (statsOn) drawStats();
-  if (modesOn) drawModes(dtLast);
-  if (hintOn) drawHint(dtLast);
-}
-
-/** Big bouncy banner in the middle of the board: pops in with overshoot, holds, then floats off. */
-function drawPraise(pr: Praise): void {
-  const t = pr.t;
-  const pop = t < 0.18 ? easeOutBack(t / 0.18) : 1;
-  const fade = t > 0.72 ? 1 - (t - 0.72) / 0.28 : 1;
-  const rise = t > 0.72 ? ((t - 0.72) / 0.28) * cell * 0.9 : 0;
-  const size = Math.round(cell * (1.05 + pr.level * 0.12));
-  const color = PRAISE_COLORS[pr.level - 1]!;
-  ctx.save();
-  ctx.globalAlpha = Math.max(0, fade);
-  ctx.translate(W / 2, boardY + cell * 3.4 - rise);
-  ctx.rotate(-0.07 + (reduceMotion ? 0 : Math.sin(t * 14) * 0.02));
-  ctx.scale(pop, pop);
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.font = `900 ${size}px ${FONT}`;
-  ctx.lineJoin = "round";
-  ctx.shadowColor = color;
-  ctx.shadowBlur = 28;
-  ctx.strokeStyle = "rgba(10,12,20,0.9)";
-  ctx.lineWidth = size * 0.22;
-  ctx.strokeText(pr.text, 0, 0);
-  ctx.shadowBlur = 0;
-  const g = ctx.createLinearGradient(0, -size / 2, 0, size / 2);
-  g.addColorStop(0, "#ffffff");
-  g.addColorStop(1, color);
-  ctx.fillStyle = g;
-  ctx.fillText(pr.text, 0, 0);
-  ctx.restore();
-}
-
-function star(x: number, y: number, r: number): void {
-  ctx.beginPath();
-  for (let i = 0; i < 10; i++) {
-    const rad = i % 2 ? r * 0.45 : r;
-    const a = (i * Math.PI) / 5 - Math.PI / 2;
-    ctx.lineTo(x + Math.cos(a) * rad, y + Math.sin(a) * rad);
-  }
-  ctx.closePath();
-}
-
-/** Slides a "badge unlocked" card down from the top, holds, then tucks it away. */
-function drawToast(t: Toast): void {
-  const inT = Math.min(1, t.t / 0.1);
-  const outT = t.t > 0.88 ? (t.t - 0.88) / 0.12 : 0;
-  const slide = easeOutBack(inT) * (1 - outT);
-  const w = Math.min(W - 32, 320);
-  const y = -70 + slide * 190;
-  ctx.save();
-  ctx.translate(W / 2, y);
-  ctx.shadowColor = "rgba(0,0,0,0.55)";
-  ctx.shadowBlur = 24;
-  ctx.fillStyle = "#1e2438";
-  ctx.beginPath();
-  ctx.roundRect(-w / 2, 0, w, 60, 18);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = "rgba(255,197,85,0.55)";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-  const g = ctx.createLinearGradient(0, 14, 0, 46);
-  g.addColorStop(0, "#fff0b3");
-  g.addColorStop(1, "#ffb42e");
-  ctx.fillStyle = g;
-  star(-w / 2 + 34, 30, 17);
-  ctx.fill();
-  ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = COLORS.combo;
-  ctx.font = `800 11px ${FONT}`;
-  ctx.fillText(t.label ?? "BADGE UNLOCKED", -w / 2 + 62, 17);
-  ctx.fillStyle = COLORS.text;
-  ctx.font = `700 16px ${FONT}`;
-  ctx.fillText(t.title, -w / 2 + 62, 35);
-  ctx.fillStyle = COLORS.dim;
-  ctx.font = `500 12px ${FONT}`;
-  ctx.fillText(t.desc, -w / 2 + 62, 51, w - 76);
-  ctx.restore();
-}
-
-// ---- Stats screen ------------------------------------------------------------------
-
-const CARD_H = 600;
-const TABS = ["Stats", "Badges", "Collection"] as const;
-let statsTab = 0;
-/** Card is laid out in a 600-unit-tall box and scaled down to fit short screens. */
-function statsLayout(): { k: number; cw: number } {
-  const k = Math.min(1, (H - 24) / CARD_H);
-  return { k, cw: Math.min((W - 24) / k, 360) };
-}
-function badgeCell(i: number, l: { cw: number }): { x: number; y: number; w: number } {
-  const w = (l.cw - 32) / 4;
-  return { x: -l.cw / 2 + 16 + w * (i % 4) + w / 2, y: -170 + Math.floor(i / 4) * 56, w };
-}
-const tabRect = (i: number, cw: number): { x: number; y: number; w: number; h: number } => {
-  const w = (cw - 48) / 3;
-  return { x: -cw / 2 + 24 + i * w, y: -250, w, h: 32 };
-};
-
-/** A small sunset scene, drawn in `size` x `size` at (x, y). The collection reveals it tile by tile. */
-function paintScene(x: number, y: number, size: number): void {
-  const sky = ctx.createLinearGradient(0, y, 0, y + size);
-  sky.addColorStop(0, "#2a1b63");
-  sky.addColorStop(0.5, "#d4559a");
-  sky.addColorStop(0.78, "#ffb15c");
-  sky.addColorStop(1, "#ffe39a");
-  ctx.fillStyle = sky;
-  ctx.fillRect(x, y, size, size);
-  ctx.fillStyle = "rgba(255,255,255,0.8)";
-  for (let i = 0; i < 18; i++) {
-    ctx.beginPath();
-    ctx.arc(x + ((i * 53) % 97) / 97 * size, y + ((i * 31) % 41) / 100 * size, 0.9 + (i % 3) * 0.5, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  const sun = ctx.createRadialGradient(x + size * 0.5, y + size * 0.66, 2, x + size * 0.5, y + size * 0.66, size * 0.3);
-  sun.addColorStop(0, "#fffbe0");
-  sun.addColorStop(0.35, "#ffd86b");
-  sun.addColorStop(1, "rgba(255,170,80,0)");
-  ctx.fillStyle = sun;
-  ctx.fillRect(x, y, size, size);
-  const ridge = (color: string, base: number, amp: number, seed: number): void => {
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(x, y + size);
-    for (let i = 0; i <= 24; i++) {
-      const t = i / 24;
-      ctx.lineTo(x + t * size, y + size * (base - amp * (Math.sin(t * 7 + seed) * 0.5 + Math.sin(t * 17 + seed * 2) * 0.25 + 0.6)));
-    }
-    ctx.lineTo(x + size, y + size);
-    ctx.fill();
-  };
-  ridge("#6a3a7d", 0.8, 0.2, 1);
-  ridge("#3d2160", 0.9, 0.17, 3);
-  ridge("#1c1238", 1.0, 0.13, 5);
-}
-
-function drawStats(): void {
-  const l = statsLayout();
-  const e = 1 - Math.pow(1 - statsT, 3);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = `rgba(7,9,14,${0.86 * e})`;
-  ctx.fillRect(0, 0, W, H);
-  ctx.save();
-  ctx.globalAlpha = e;
-  ctx.translate(W / 2, H / 2 + (1 - e) * 24);
-  ctx.scale(l.k, l.k);
-  const cw = l.cw;
-  const card = ctx.createLinearGradient(0, -CARD_H / 2, 0, CARD_H / 2);
-  card.addColorStop(0, "#222840");
-  card.addColorStop(1, "#151a2a");
-  ctx.shadowColor = "rgba(0,0,0,0.6)";
-  ctx.shadowBlur = 40;
-  ctx.fillStyle = card;
-  ctx.beginPath();
-  ctx.roundRect(-cw / 2, -CARD_H / 2, cw, CARD_H, 26);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = "rgba(255,255,255,0.09)";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "center";
-  ctx.fillStyle = COLORS.text;
-  ctx.font = `800 22px ${FONT}`;
-  ctx.fillText("Your progress", 0, -276);
-  TABS.forEach((name, i) => {
-    const r = tabRect(i, cw);
-    const on = statsTab === i;
-    ctx.fillStyle = on ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.04)";
-    ctx.beginPath();
-    ctx.roundRect(r.x + 2, r.y, r.w - 4, r.h, 16);
-    ctx.fill();
-    ctx.fillStyle = on ? COLORS.text : COLORS.dim;
-    ctx.font = `700 13px ${FONT}`;
-    ctx.fillText(name, r.x + r.w / 2, r.y + r.h / 2 + 1);
-  });
-
-  if (statsTab === 0) drawStatsTab(cw);
-  else if (statsTab === 1) drawBadgesTab(l);
-  else drawCollectionTab(cw);
-
-  const bg = ctx.createLinearGradient(0, 246, 0, 290);
-  bg.addColorStop(0, "#6cb4ff");
-  bg.addColorStop(1, "#3a82e6");
-  ctx.fillStyle = bg;
-  ctx.beginPath();
-  ctx.roundRect(-84, 248, 168, 42, 21);
-  ctx.fill();
-  ctx.fillStyle = "#fff";
-  ctx.font = `700 16px ${FONT}`;
-  ctx.textAlign = "center";
-  ctx.fillText("Close", 0, 270);
-  ctx.restore();
-}
-
-function drawStatsTab(cw: number): void {
-  ctx.textAlign = "center";
-  ctx.fillStyle = COLORS.combo;
-  ctx.font = `700 13px ${FONT}`;
-  const perk = perkUndos();
-  ctx.fillText(`Rank: ${rankName()}${perk ? `  \u00B7  +${perk} undo${perk > 1 ? "s" : ""} in random games` : ""}`, 0, -196, cw - 40);
-
-  const avg = stats.finished ? Math.round(stats.total / stats.finished) : 0;
-  const tiles: [string, string][] = [
-    ["Games", stats.games.toLocaleString()], ["Best score", stats.bestScore.toLocaleString()], ["Average", avg.toLocaleString()],
-    ["Best combo", `${stats.bestCombo}x`], ["Lines cleared", stats.lines.toLocaleString()], ["Perfect clears", String(stats.perfects)],
-  ];
-  const tw = (cw - 48 - 20) / 3;
-  tiles.forEach(([name, value], i) => {
-    const x = -cw / 2 + 24 + (i % 3) * (tw + 10);
-    const y = -172 + Math.floor(i / 3) * 70;
-    ctx.fillStyle = "rgba(255,255,255,0.05)";
-    ctx.beginPath();
-    ctx.roundRect(x, y, tw, 62, 14);
-    ctx.fill();
-    ctx.fillStyle = COLORS.text;
-    ctx.font = `800 ${value.length > 9 ? 13 : 20}px ${FONT}`;
-    ctx.fillText(value, x + tw / 2, y + 25, tw - 8);
-    ctx.fillStyle = COLORS.dim;
-    ctx.font = `600 11px ${FONT}`;
-    ctx.fillText(name, x + tw / 2, y + 46, tw - 8);
-  });
-
-  // Score distribution: where your finished games land.
-  ctx.textAlign = "left";
-  ctx.fillStyle = COLORS.text;
-  ctx.font = `800 14px ${FONT}`;
-  ctx.fillText("Score distribution", -cw / 2 + 24, -16);
-  const peak = Math.max(1, ...stats.hist);
-  stats.hist.forEach((count, i) => {
-    const y = 4 + i * 23;
-    ctx.fillStyle = COLORS.dim;
-    ctx.font = `600 11px ${FONT}`;
-    ctx.textAlign = "left";
-    ctx.fillText(BUCKET_LABELS[i]!, -cw / 2 + 24, y + 9);
-    const maxW = cw - 48 - 64;
-    ctx.fillStyle = "rgba(255,255,255,0.06)";
-    ctx.beginPath();
-    ctx.roundRect(-cw / 2 + 64, y, maxW, 18, 6);
-    ctx.fill();
-    if (count > 0) {
-      const g = ctx.createLinearGradient(-cw / 2 + 64, 0, -cw / 2 + 64 + maxW, 0);
-      g.addColorStop(0, "#6cb4ff");
-      g.addColorStop(1, "#9a7bff");
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.roundRect(-cw / 2 + 64, y, Math.max(8, (maxW * count) / peak), 18, 6);
-      ctx.fill();
-    }
-    ctx.fillStyle = COLORS.text;
-    ctx.textAlign = "right";
-    ctx.font = `700 11px ${FONT}`;
-    ctx.fillText(String(count), -cw / 2 + 64 + maxW - 6, y + 10);
-  });
-
-  ctx.textAlign = "center";
-  ctx.fillStyle = COLORS.dim;
-  ctx.font = `600 12px ${FONT}`;
-  const rec = readStreak();
-  const freeze = freezeAvailable(rec, today()) ? "freeze ready" : "freeze used this week";
-  ctx.fillText(`Daily streak ${streakNow()} \u00B7 best ${stats.bestStreak} \u00B7 ${freeze}`, 0, 168, cw - 40);
-  ctx.fillText(`Weekly wins ${stats.weeklyWins} \u00B7 Journey levels ${stats.levels} \u00B7 Zen lines ${stats.zenLines}`, 0, 192, cw - 40);
-}
-
-function drawBadgesTab(l: { cw: number }): void {
-  const cw = l.cw;
-  ctx.textAlign = "left";
-  ctx.fillStyle = COLORS.text;
-  ctx.font = `800 15px ${FONT}`;
-  ctx.fillText("Badges", -cw / 2 + 24, -196);
-  ctx.textAlign = "right";
-  ctx.fillStyle = COLORS.dim;
-  ctx.font = `700 13px ${FONT}`;
-  ctx.fillText(`${unlocked.length} / ${BADGES.length}`, cw / 2 - 24, -196);
-
-  ctx.textAlign = "center";
-  BADGES.forEach((b, i) => {
-    const c = badgeCell(i, l);
-    const got = unlocked.includes(b.id);
-    if (badgeSel === i) {
-      ctx.fillStyle = "rgba(255,255,255,0.07)";
-      ctx.beginPath();
-      ctx.roundRect(c.x - c.w / 2 + 2, c.y - 3, c.w - 4, 54, 12);
-      ctx.fill();
-    }
-    if (got) {
-      const g = ctx.createLinearGradient(0, c.y, 0, c.y + 30);
-      g.addColorStop(0, "#fff0b3");
-      g.addColorStop(1, "#ffb42e");
-      ctx.fillStyle = g;
-      ctx.shadowColor = "rgba(255,180,46,0.6)";
-      ctx.shadowBlur = 10;
-      star(c.x, c.y + 14, 14);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    } else {
-      ctx.strokeStyle = "rgba(255,255,255,0.2)";
-      ctx.lineWidth = 1.5;
-      star(c.x, c.y + 14, 13);
-      ctx.stroke();
-      const pr = b.progress?.();
-      if (pr) {
-        const bw = c.w - 22;
-        ctx.fillStyle = "rgba(255,255,255,0.1)";
-        ctx.beginPath();
-        ctx.roundRect(c.x - bw / 2, c.y + 44, bw, 4, 2);
-        ctx.fill();
-        ctx.fillStyle = COLORS.combo;
-        ctx.beginPath();
-        ctx.roundRect(c.x - bw / 2, c.y + 44, Math.max(3, bw * Math.min(1, pr[0] / pr[1])), 4, 2);
-        ctx.fill();
-      }
-    }
-    ctx.fillStyle = got ? COLORS.text : "#586079";
-    ctx.font = `600 11px ${FONT}`;
-    ctx.fillText(b.name, c.x, c.y + 35, c.w - 4);
-  });
-
-  const sel = badgeSel >= 0 ? BADGES[badgeSel] : undefined;
-  ctx.textAlign = "center";
-  ctx.fillStyle = COLORS.dim;
-  ctx.font = `500 13px ${FONT}`;
-  ctx.fillText(sel ? `${sel.name}: ${sel.desc}` : "Tap a badge to see how to earn it.", 0, 178, cw - 40);
-  if (sel) {
-    const pr = sel.progress?.();
-    const got = unlocked.includes(sel.id);
-    ctx.fillStyle = COLORS.combo;
-    ctx.font = `700 12px ${FONT}`;
-    const bits = [
-      got ? "Earned" : pr ? `Progress ${Math.min(pr[0], pr[1]).toLocaleString()} / ${pr[1].toLocaleString()}` : "",
-      sel.reward ? `Reward: ${sel.reward}` : "",
-    ].filter(Boolean);
-    ctx.fillText(bits.join("  \u00B7  "), 0, 200, cw - 40);
-  } else {
-    ctx.font = `500 12px ${FONT}`;
-    ctx.fillText("Every 5 badges: +1 undo in random games.", 0, 200, cw - 40);
-  }
-}
-
-function drawCollectionTab(cw: number): void {
-  const n = collectionTiles();
-  const size = Math.min(264, cw - 64);
-  const tile = size / 4;
-  const x0 = -size / 2;
-  const y0 = -196;
-  const shown = new Set(TILE_ORDER.slice(0, n));
-  for (let i = 0; i < COLLECTION_SIZE; i++) {
-    const tx = x0 + (i % 4) * tile;
-    const ty = y0 + Math.floor(i / 4) * tile;
-    ctx.save();
-    ctx.beginPath();
-    ctx.roundRect(tx + 1.5, ty + 1.5, tile - 3, tile - 3, 8);
-    ctx.clip();
-    if (shown.has(i)) {
-      paintScene(x0, y0, size);
-    } else {
-      ctx.fillStyle = "#12162a";
-      ctx.fillRect(tx, ty, tile, tile);
-      ctx.fillStyle = "rgba(255,255,255,0.12)";
-      ctx.font = `700 ${Math.round(tile * 0.4)}px ${FONT}`;
-      ctx.textAlign = "center";
-      ctx.fillText("?", tx + tile / 2, ty + tile / 2 + 1);
-    }
-    ctx.restore();
-  }
-  ctx.textAlign = "center";
-  ctx.fillStyle = COLORS.text;
-  ctx.font = `800 15px ${FONT}`;
-  ctx.fillText(`${n} / ${COLLECTION_SIZE} tiles`, 0, y0 + size + 24);
-  ctx.fillStyle = COLORS.dim;
-  ctx.font = `500 12px ${FONT}`;
-  const toNext = 40 - (stats.lines % 40);
-  ctx.fillText(n >= COLLECTION_SIZE ? "Complete! The Prism theme is yours." : `Next tile in ${toNext} lines, or a weekly win or 5 journey levels.`, 0, y0 + size + 46, cw - 40);
-  ctx.fillStyle = COLORS.combo;
-  ctx.font = `700 12px ${FONT}`;
-  ctx.fillText(n >= COLLECTION_SIZE ? "Unlocked: Prism theme" : "Reward: Prism theme when complete", 0, y0 + size + 68, cw - 40);
-}
-
-// ---- Modes sheet ------------------------------------------------------------------
-
-const MODES_H = 580;
-function modesLayout(): { k: number; cw: number } {
-  const k = Math.min(1, (H - 24) / MODES_H);
-  return { k, cw: Math.min((W - 24) / k, 350) };
-}
-
-/** The last fortnight of dailies, newest first, for the archive. */
-const archiveDates = (): string[] => Array.from({ length: 14 }, (_, i) => addDays(today(), -(i + 1)));
-
-function pickMode(i: number): void {
-  haptics.tick();
-  if (i === 5) { modesView = "archive"; return; }
-  modesOn = false;
-  if (i === 0) startGame({});
-  else if (i === 1) startGame({ daily: today() });
-  else if (i === 2) startGame({ kind: "weekly" });
-  else if (i === 3) startGame({ kind: "journey", level: readJourney().next });
-  else startGame({ kind: "zen" });
-}
-
-function drawModes(dt: number): void {
-  modesT = Math.min(1, modesT + dt * 3);
-  const l = modesLayout();
-  const e = 1 - Math.pow(1 - modesT, 3);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = `rgba(7,9,14,${0.86 * e})`;
-  ctx.fillRect(0, 0, W, H);
-  ctx.save();
-  ctx.globalAlpha = e;
-  ctx.translate(W / 2, H / 2 + (1 - e) * 24);
-  ctx.scale(l.k, l.k);
-  const cw = l.cw;
-  const card = ctx.createLinearGradient(0, -MODES_H / 2, 0, MODES_H / 2);
-  card.addColorStop(0, "#222840");
-  card.addColorStop(1, "#151a2a");
-  ctx.shadowColor = "rgba(0,0,0,0.6)";
-  ctx.shadowBlur = 40;
-  ctx.fillStyle = card;
-  ctx.beginPath();
-  ctx.roundRect(-cw / 2, -MODES_H / 2, cw, MODES_H, 26);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = "rgba(255,255,255,0.09)";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "center";
-  ctx.fillStyle = COLORS.text;
-  ctx.font = `800 22px ${FONT}`;
-  ctx.fillText(modesView === "main" ? "Choose a mode" : "Daily archive", 0, -252);
-
-  if (modesView === "main") {
-    const t = today();
-    const off = officialResult(t);
-    const par = parFor(t);
-    const wk = weeklyFor(weekId(t));
-    const j = readJourney();
-    const stars = Object.values(j.stars).reduce((a, b) => a + b, 0);
-    const rows: { icon: string; name: string; sub: string; tag?: string; hot?: boolean }[] = [
-      { icon: "\u{1F3B2}", name: "Classic", sub: "Endless. Chase your best score." },
-      {
-        icon: "\u{1F4C5}", name: "Daily",
-        sub: off ? `Your result: ${off.score.toLocaleString("en-US")}${par ? ` \u00B7 par ${par}` : ""}. Replays are practice.` : `Same pieces for everyone${par ? ` \u00B7 par ${par}` : ""}.`,
-        tag: streakNow() > 0 ? `\u{1F525} ${streakNow()}` : undefined, hot: !off,
-      },
-      { icon: "\u26A1", name: `Weekly: ${wk.title}`, sub: wk.rule, tag: weeklyCompleted(weekId(t)) ? "\u2713 done" : undefined, hot: !weeklyCompleted(weekId(t)) },
-      { icon: "\u{1F9ED}", name: "Journey", sub: `Level ${j.next} next \u00B7 ${stars} \u2605 earned` },
-      { icon: "\u{1F33F}", name: "Zen", sub: "No game over. Relax and clear lines." },
-      { icon: "\u{1F5C2}", name: "Daily archive", sub: "Replay the last two weeks of dailies." },
-    ];
-    rows.forEach((r, i) => {
-      const y = -200 + i * 70;
-      ctx.fillStyle = r.hot ? "rgba(255,197,85,0.09)" : "rgba(255,255,255,0.05)";
-      ctx.beginPath();
-      ctx.roundRect(-cw / 2 + 16, y, cw - 32, 62, 16);
-      ctx.fill();
-      if (r.hot) {
-        ctx.strokeStyle = "rgba(255,197,85,0.4)";
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      }
-      ctx.textAlign = "left";
-      ctx.font = `600 24px ${FONT}`;
-      ctx.fillStyle = COLORS.text;
-      ctx.fillText(r.icon, -cw / 2 + 30, y + 31);
-      ctx.font = `700 15px ${FONT}`;
-      ctx.fillText(r.name, -cw / 2 + 68, y + 21, cw - 150);
-      ctx.fillStyle = COLORS.dim;
-      ctx.font = `500 12px ${FONT}`;
-      ctx.fillText(r.sub, -cw / 2 + 68, y + 43, cw - 110);
-      if (r.tag) {
-        ctx.textAlign = "right";
-        ctx.fillStyle = COLORS.combo;
-        ctx.font = `800 12px ${FONT}`;
-        ctx.fillText(r.tag, cw / 2 - 28, y + 21);
-      }
-    });
-  } else {
-    const dates = archiveDates();
-    const cw2 = (cw - 48 - 10) / 2;
-    dates.forEach((d, i) => {
-      const x = -cw / 2 + 24 + (i % 2) * (cw2 + 10);
-      const y = -200 + Math.floor(i / 2) * 58;
-      const off = officialResult(d);
-      ctx.fillStyle = "rgba(255,255,255,0.05)";
-      ctx.beginPath();
-      ctx.roundRect(x, y, cw2, 50, 14);
-      ctx.fill();
-      ctx.textAlign = "left";
-      ctx.fillStyle = COLORS.text;
-      ctx.font = `700 14px ${FONT}`;
-      const [yy, mm, dd] = d.split("-").map(Number);
-      ctx.fillText(new Date(yy!, mm! - 1, dd!).toLocaleDateString("en-US", { month: "short", day: "numeric", weekday: "short" }), x + 14, y + 19);
-      ctx.fillStyle = off ? COLORS.combo : COLORS.dim;
-      ctx.font = `600 12px ${FONT}`;
-      ctx.fillText(off ? `${off.score.toLocaleString("en-US")}${parFor(d) ? ` / par ${parFor(d)}` : ""}` : "Not played", x + 14, y + 38, cw2 - 24);
-    });
-    ctx.textAlign = "center";
-    ctx.fillStyle = COLORS.dim;
-    ctx.font = `500 12px ${FONT}`;
-    ctx.fillText("Archive runs never count toward your streak.", 0, 218);
-  }
-
-  const bg = ctx.createLinearGradient(0, 232, 0, 280);
-  bg.addColorStop(0, "#6cb4ff");
-  bg.addColorStop(1, "#3a82e6");
-  ctx.fillStyle = bg;
-  ctx.beginPath();
-  ctx.roundRect(-84, 236, 168, 42, 21);
-  ctx.fill();
-  ctx.fillStyle = "#fff";
-  ctx.font = `700 16px ${FONT}`;
-  ctx.textAlign = "center";
-  ctx.fillText(modesView === "archive" ? "Back" : "Close", 0, 258);
-  ctx.restore();
-}
-
-function drawChallengeIntro(dt: number): void {
-  chT = Math.min(1, chT + dt * 2.2);
-  const e = 1 - Math.pow(1 - chT, 3);
-  const ch = chIntro!;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = `rgba(7,9,14,${0.88 * e})`;
-  ctx.fillRect(0, 0, W, H);
-  ctx.save();
-  ctx.globalAlpha = e;
-  ctx.translate(W / 2, H / 2 + (1 - e) * 24);
-  const cw = Math.min(W - 40, 330);
-  const card = ctx.createLinearGradient(0, -170, 0, 190);
-  card.addColorStop(0, "#2a2447");
-  card.addColorStop(1, "#151a2a");
-  ctx.shadowColor = "rgba(0,0,0,0.6)";
-  ctx.shadowBlur = 40;
-  ctx.fillStyle = card;
-  ctx.beginPath();
-  ctx.roundRect(-cw / 2, -170, cw, 360, 26);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = "rgba(255,197,85,0.35)";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = COLORS.combo;
-  ctx.font = `800 13px ${FONT}`;
-  ctx.fillText("A FRIEND CHALLENGED YOU", 0, -128);
-  ctx.fillStyle = COLORS.text;
-  ctx.font = `600 16px ${FONT}`;
-  ctx.fillText("Beat this score", 0, -92);
-  const g = ctx.createLinearGradient(0, -70, 0, -10);
-  g.addColorStop(0, "#fff0b3");
-  g.addColorStop(1, "#ffb42e");
-  ctx.fillStyle = g;
-  ctx.font = `900 68px ${FONT}`;
-  ctx.fillText(ch.target.toLocaleString(), 0, -40);
-  ctx.fillStyle = COLORS.dim;
-  ctx.font = `500 14px ${FONT}`;
-  ctx.fillText("on the exact same pieces they got.", 0, 8);
-  if (state.score > 0 && !state.over) {
-    ctx.font = `500 12px ${FONT}`;
-    ctx.fillText("This replaces your current game.", 0, 34);
-  }
-
-  const bg = ctx.createLinearGradient(0, 66, 0, 126);
-  bg.addColorStop(0, "#ffd166");
-  bg.addColorStop(1, "#f59e0b");
-  ctx.fillStyle = bg;
-  ctx.beginPath();
-  ctx.roundRect(-100, 66, 200, 56, 28);
-  ctx.fill();
-  ctx.fillStyle = "#2a1a00";
-  ctx.font = `800 19px ${FONT}`;
-  ctx.fillText("Accept challenge", 0, 95);
-  ctx.fillStyle = COLORS.dim;
-  ctx.font = `600 15px ${FONT}`;
-  ctx.fillText("Not now", 0, 154);
-  ctx.restore();
-}
-
-function drawHint(dt: number): void {
-  hintT = Math.min(1, hintT + dt * 2.2);
-  const e = 1 - Math.pow(1 - hintT, 3);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = `rgba(7,9,14,${0.86 * e})`;
-  ctx.fillRect(0, 0, W, H);
-  ctx.save();
-  ctx.globalAlpha = e;
-  ctx.translate(W / 2, H / 2 + (1 - e) * 24);
-  const cw = Math.min(W - 40, 340);
-  ctx.shadowColor = "rgba(0,0,0,0.6)";
-  ctx.shadowBlur = 40;
-  const card = ctx.createLinearGradient(0, -190, 0, 190);
-  card.addColorStop(0, "#222840");
-  card.addColorStop(1, "#151a2a");
-  ctx.fillStyle = card;
-  ctx.beginPath();
-  ctx.roundRect(-cw / 2, -190, cw, 380, 26);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = "rgba(255,255,255,0.09)";
-  ctx.stroke();
-
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "center";
-  ctx.fillStyle = COLORS.text;
-  ctx.font = `800 26px ${FONT}`;
-  ctx.fillText("How to play", 0, -148);
-
-  const steps = [
-    ["Drag", "a piece from the tray onto the board."],
-    ["Fill", "a row, column or outlined 2\u00D74 block."],
-    ["Chain", "clears for combo bonuses. No timer, no rotating."],
-  ];
-  steps.forEach(([head, body], i) => {
-    const y = -82 + i * 62;
-    ctx.fillStyle = PALETTE[i]!;
-    ctx.beginPath();
-    ctx.arc(-cw / 2 + 36, y, 15, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#fff";
-    ctx.font = `800 15px ${FONT}`;
-    ctx.fillText(String(i + 1), -cw / 2 + 36, y + 1);
-    ctx.textAlign = "left";
-    ctx.fillStyle = COLORS.text;
-    ctx.font = `700 15px ${FONT}`;
-    ctx.fillText(head!, -cw / 2 + 62, y - 10);
-    ctx.fillStyle = COLORS.dim;
-    ctx.font = `500 13px ${FONT}`;
-    ctx.fillText(body!, -cw / 2 + 62, y + 10, cw - 84);
-    ctx.textAlign = "center";
-  });
-  ctx.fillStyle = COLORS.dim;
-  ctx.font = `500 13px ${FONT}`;
-  ctx.fillText("The game ends when no piece fits.", 0, 106);
-
-  const bg = ctx.createLinearGradient(0, 128, 0, 176);
-  bg.addColorStop(0, "#6cb4ff");
-  bg.addColorStop(1, "#3a82e6");
-  ctx.fillStyle = bg;
-  ctx.beginPath();
-  ctx.roundRect(-84, 134, 168, 46, 23);
-  ctx.fill();
-  ctx.fillStyle = "#fff";
-  ctx.font = `700 17px ${FONT}`;
-  ctx.fillText("Got it", 0, 158);
-  ctx.restore();
+  if (ui.chIntro && !ui.hintOn) drawChallengeIntro(dtLast, state.score > 0 && !state.over);
+  if (ui.statsOn) drawStats();
+  if (ui.modesOn) drawModes(dtLast);
+  if (ui.settingsOn) drawSettings(dtLast);
+  if (ui.hintOn) drawHint(dtLast);
 }
 
 let last = performance.now();

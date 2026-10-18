@@ -14,15 +14,16 @@ export interface WeeklyRun {
 export const blankRun = (): WeeklyRun => ({ lines: 0, moves: 0, doubles: 0, ones: 0, undos: 0, score: 0 });
 
 export interface Weekly {
-  id: "nolone" | "doubles" | "survive" | "score";
+  id: "efficient" | "doubles" | "survive" | "score";
   title: string;
   rule: string;
   goal: number;
   unit: string;
+  limit?: number; // placements allowed, for the efficiency rule
 }
 
 const TEMPLATES: Weekly[] = [
-  { id: "nolone", title: "Clean sweep", rule: "Clear 15 lines without placing a 1×1.", goal: 15, unit: "lines" },
+  { id: "efficient", title: "Clean sweep", rule: "Clear 15 lines within 45 placements.", goal: 15, unit: "lines", limit: 45 },
   { id: "doubles", title: "Double trouble", rule: "Make 4 double clears (2+ lines in one move).", goal: 4, unit: "doubles" },
   { id: "survive", title: "Iron nerve", rule: "Place 45 pieces without using undo.", goal: 45, unit: "pieces" },
   { id: "score", title: "High roller", rule: "Score 600 in one game.", goal: 600, unit: "points" },
@@ -39,7 +40,7 @@ export function weeklySeed(week: string): string {
 
 export function weeklyValue(w: Weekly, run: WeeklyRun): number {
   switch (w.id) {
-    case "nolone": return run.lines;
+    case "efficient": return run.lines;
     case "doubles": return run.doubles;
     case "survive": return run.moves;
     case "score": return run.score;
@@ -48,7 +49,7 @@ export function weeklyValue(w: Weekly, run: WeeklyRun): number {
 
 /** True once the run has broken the week's rule; the attempt can no longer count. */
 export function weeklyFailed(w: Weekly, run: WeeklyRun): boolean {
-  return (w.id === "nolone" && run.ones > 0) || (w.id === "survive" && run.undos > 0);
+  return (w.id === "efficient" && run.moves >= (w.limit ?? Infinity) && run.lines < w.goal) || (w.id === "survive" && run.undos > 0);
 }
 
 export const weeklyDone = (w: Weekly, run: WeeklyRun): boolean => !weeklyFailed(w, run) && weeklyValue(w, run) >= w.goal;

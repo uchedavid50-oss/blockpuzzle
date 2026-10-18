@@ -33,6 +33,19 @@ export const REGION_W = 4;
 export const REGIONS_ACROSS = SIZE / REGION_W;
 export const REGION_COUNT = (SIZE / REGION_H) * REGIONS_ACROSS;
 
+/** A region shape other than the default, used to compare candidates when tuning. */
+export interface RegionShape { h: number; w: number }
+const DEFAULT_SHAPE: RegionShape = { h: REGION_H, w: REGION_W };
+
+function regionCellsFor(index: number, shape: RegionShape): Cell[] {
+  const across = SIZE / shape.w;
+  const r0 = Math.floor(index / across) * shape.h;
+  const c0 = (index % across) * shape.w;
+  const out: Cell[] = [];
+  for (let r = 0; r < shape.h; r++) for (let c = 0; c < shape.w; c++) out.push([r0 + r, c0 + c]);
+  return out;
+}
+
 export function regionOf(r: number, c: number): number {
   return Math.floor(r / REGION_H) * REGIONS_ACROSS + Math.floor(c / REGION_W);
 }
@@ -75,7 +88,7 @@ export function clearedCells(res: Pick<PlaceResult, "rowsCleared" | "colsCleared
  * mutate input. `combo` is how many consecutive prior moves cleared something; it multiplies the
  * line bonus. Set `regions` to false for the classic rows-and-columns-only rules.
  */
-export function place(grid: Grid, shape: Shape, row: number, col: number, combo = 0, regions = true): PlaceResult {
+export function place(grid: Grid, shape: Shape, row: number, col: number, combo = 0, regions: boolean | RegionShape = true): PlaceResult {
   if (!canPlace(grid, shape, row, col)) throw new Error("illegal placement");
   const next = grid.map((r) => r.slice());
   for (const [dr, dc] of shape) next[row + dr]![col + dc] = true;
@@ -87,11 +100,18 @@ export function place(grid: Grid, shape: Shape, row: number, col: number, combo 
     if (next[i]!.every(Boolean)) rowsCleared.push(i);
     if (next.every((r) => r[i])) colsCleared.push(i);
   }
-  if (regions)
-    for (let i = 0; i < REGION_COUNT; i++) if (regionCells(i).every(([r, c]) => next[r]![c])) regionsCleared.push(i);
+  const rs = regions === true ? DEFAULT_SHAPE : regions === false ? null : regions;
+  if (rs) {
+    const count = (SIZE / rs.h) * (SIZE / rs.w);
+    for (let i = 0; i < count; i++) if (regionCellsFor(i, rs).every(([r, c]) => next[r]![c])) regionsCleared.push(i);
+  }
 
   // Clear only after all detection, so crossing lines and regions all fire together.
-  for (const [r, c] of clearedCells({ rowsCleared, colsCleared, regionsCleared })) next[r]![c] = false;
+  const cleared = new Set<number>();
+  for (const r of rowsCleared) for (let c = 0; c < SIZE; c++) cleared.add(r * SIZE + c);
+  for (const c of colsCleared) for (let r = 0; r < SIZE; r++) cleared.add(r * SIZE + c);
+  if (rs) for (const i of regionsCleared) for (const [r, c] of regionCellsFor(i, rs)) cleared.add(r * SIZE + c);
+  for (const k of cleared) next[Math.floor(k / SIZE)]![k % SIZE] = false;
 
   const lines = rowsCleared.length + colsCleared.length + regionsCleared.length;
   const bonus = lines > 0 ? Math.round(SIZE * lines * lines * (1 + 0.5 * combo)) : 0;

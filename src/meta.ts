@@ -16,3 +16,14 @@ export function timeUntilMidnight(now: Date): { h: number; m: number } {
   const mins = Math.max(0, Math.ceil((next.getTime() - now.getTime()) / 60_000));
   return { h: Math.floor(mins / 60), m: mins % 60 };
 }
+
+export type MonthDay = readonly [month: number, day: number];
+
+/** True if `now` falls in the yearly window from..to (inclusive). Windows may wrap the new year, like Dec 1 - Jan 6. */
+export function inSeason(now: Date, from: MonthDay, to: MonthDay): boolean {
+  const k = (m: number, d: number): number => m * 100 + d;
+  const n = k(now.getMonth() + 1, now.getDate());
+  const a = k(from[0], from[1]);
+  const b = k(to[0], to[1]);
+  return a <= b ? n >= a && n <= b : n >= a || n <= b;
+}

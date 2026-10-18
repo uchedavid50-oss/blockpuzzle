@@ -3,6 +3,7 @@
 // need no stored content. The piece generator is the normal one: it never reads the score.
 
 import { REGION_COUNT, SIZE, regionCells, type Grid } from "./board";
+import { LEVEL_TABLE } from "./levelTable";
 import { seeded } from "./rng";
 
 export type GoalKind = "score" | "lines" | "place";
@@ -14,6 +15,14 @@ export interface Level {
   goal: { kind: GoalKind; target: number };
   parMoves: number; // placements for a 3-star clear
 }
+
+/**
+ * Per-level tuning, produced offline by scripts/make-levels.ts: the board density that keeps a level
+ * playable, and caps on each goal at 70% of what the bot reaches, so every level is provably winnable.
+ */
+export interface LevelTuning { d: number; s: number; l: number; m: number; pm: number }
+
+export const defaultDensity = (n: number): number => Math.min(0.36, 0.09 + 0.006 * n);
 
 export const GOAL_LABEL: Record<GoalKind, string> = { score: "Reach", lines: "Clear lines", place: "Place pieces" };
 
@@ -27,9 +36,8 @@ function lineComplete(g: boolean[][]): boolean {
 }
 
 /** A scattering of blocks that never completes a row, column or region on its own. */
-export function prefillFor(n: number): Grid {
+export function prefillFor(n: number, density = LEVEL_TABLE[n - 1]?.d ?? defaultDensity(n)): Grid {
   const rng = seeded(`journey-fill:${n}`);
-  const density = Math.min(0.5, 0.1 + 0.011 * n);
   const target = Math.round(density * SIZE * SIZE);
   const g: boolean[][] = Array.from({ length: SIZE }, () => Array<boolean>(SIZE).fill(false));
   let placed = 0;
@@ -45,18 +53,23 @@ export function prefillFor(n: number): Grid {
   return g;
 }
 
-export function makeLevel(n: number): Level {
+/** The unclamped goal for a level; the table then caps it to what is actually achievable. */
+export function baseTarget(kind: GoalKind, level: number): number {
+  return kind === "score" ? 150 + 40 * level : kind === "lines" ? Math.min(40, 4 + Math.floor(level / 2)) : Math.min(120, 18 + level);
+}
+
+export function makeLevel(n: number, table: readonly LevelTuning[] = LEVEL_TABLE): Level {
   const level = Math.max(1, Math.floor(n));
   const kind: GoalKind = (["score", "lines", "place"] as const)[(level - 1) % 3]!;
-  const target =
-    kind === "score" ? 150 + 40 * level
-    : kind === "lines" ? Math.min(40, 4 + Math.floor(level / 2))
-    : Math.min(120, 18 + level);
-  const parMoves =
-    kind === "score" ? Math.ceil(target / 16)
-    : kind === "lines" ? Math.ceil(target * 2.4)
-    : target; // "place" levels are about surviving, so par is simply the target
-  return { n: level, seed: `j-${level}`, prefill: prefillFor(level), goal: { kind, target }, parMoves };
+  const t = table[level - 1];
+  const cap = !t ? Infinity : kind === "score" ? t.s : kind === "lines" ? t.l : t.m;
+  const floor = kind === "score" ? 100 : kind === "lines" ? 3 : 10;
+  const target = Math.max(floor, Math.min(baseTarget(kind, level), cap));
+  const formulaPar = kind === "score" ? Math.ceil(target / 16) : kind === "lines" ? Math.ceil(target * 2.4) : target;
+  return {
+    n: level, seed: `j-${level}`, prefill: prefillFor(level, t?.d), goal: { kind, target },
+    parMoves: t && t.pm > 0 && kind !== "place" ? t.pm : formulaPar,
+  };
 }
 
 export interface LevelProgress { score: number; lines: number; moves: number }

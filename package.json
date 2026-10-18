@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
-    "par": "vite-node scripts/make-par.ts"
+    "par": "vite-node scripts/make-par.ts",
+    "validate": "vite-node scripts/validate.ts",
+    "levels": "vite-node scripts/make-levels.ts"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

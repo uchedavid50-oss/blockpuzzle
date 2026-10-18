@@ -1,12 +1,12 @@
 // Vibration feedback. Android browsers support it; iOS Safari (and iOS home-screen apps) do not,
-// so every call is a harmless no-op there. Muting sound also silences haptics.
+// so every call is a harmless no-op there. Vibration has its own switch in the settings.
 
-import { isMuted } from "./sound";
+import { settings } from "./settings";
 
 const supported = typeof navigator !== "undefined" && typeof navigator.vibrate === "function";
 
 export function haptic(pattern: number | number[]): void {
-  if (!supported || isMuted()) return;
+  if (!supported || !settings.haptics) return;
   try { navigator.vibrate(pattern); } catch { /* ignore */ }
 }
 

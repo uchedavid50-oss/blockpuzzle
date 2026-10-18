@@ -29,15 +29,22 @@ describe("recordMove", () => {
 });
 
 describe("rules", () => {
-  it("clean sweep fails on a 1x1 and completes at 15 lines", () => {
-    const w = byId("nolone");
+  it("clean sweep needs 15 lines inside 45 placements", () => {
+    const w = byId("efficient");
     let r = blankRun();
     for (let i = 0; i < 15; i++) r = recordMove(r, { lines: 1, cells: 4, points: 10 });
     expect(weeklyValue(w, r)).toBe(15);
     expect(weeklyDone(w, r)).toBe(true);
-    const broken = recordMove(r, { lines: 0, cells: 1, points: 1 });
-    expect(weeklyFailed(w, broken)).toBe(true);
-    expect(weeklyDone(w, broken)).toBe(false);
+    // 45 placements with only 14 lines: out of moves, so the attempt can no longer count.
+    let slow = blankRun();
+    for (let i = 0; i < 45; i++) slow = recordMove(slow, { lines: i < 14 ? 1 : 0, cells: 3, points: 3 });
+    expect(weeklyFailed(w, slow)).toBe(true);
+    expect(weeklyDone(w, slow)).toBe(false);
+    // the 45th placement may still be the one that finishes it
+    let last = blankRun();
+    for (let i = 0; i < 44; i++) last = recordMove(last, { lines: i < 14 ? 1 : 0, cells: 3, points: 3 });
+    last = recordMove(last, { lines: 1, cells: 3, points: 3 });
+    expect(weeklyDone(w, last)).toBe(true);
   });
   it("iron nerve fails on undo", () => {
     const w = byId("survive");

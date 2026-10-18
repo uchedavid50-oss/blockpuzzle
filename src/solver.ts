@@ -2,7 +2,7 @@
 // give each day's daily a "par" score, so a score has a scale to be read against.
 // It plays by the real rules and the real tray generator; it never sees the human's game.
 
-import { SIZE, canPlace, emptyGrid, place, type Grid, type Shape } from "./board";
+import { SIZE, canPlace, emptyGrid, place, type Grid, type RegionShape, type Shape } from "./board";
 import { drawTray } from "./pieces";
 import { seeded } from "./rng";
 
@@ -27,12 +27,14 @@ function clutter(grid: Grid): number {
 export interface SolveResult { score: number; moves: number }
 
 interface Move { i: number; r: number; c: number }
+export interface Rules { regions: boolean | RegionShape }
+const DEFAULT_RULES: Rules = { regions: true };
 
 /**
  * Looks ahead across the whole tray: tries the pieces in every order, keeping only the few most
  * promising placements at each step (a beam), and returns the sequence that ends best.
  */
-function plan(grid: Grid, tray: readonly (Shape | null)[], combo: number, beam: number): { total: number; moves: Move[] } {
+function plan(grid: Grid, tray: readonly (Shape | null)[], combo: number, beam: number, rules: Rules): { total: number; moves: Move[] } {
   const search = (g: Grid, left: number[], cmb: number): { total: number; moves: Move[] } => {
     let best = { total: -clutter(g), moves: [] as Move[] };
     for (const i of left) {
@@ -41,7 +43,7 @@ function plan(grid: Grid, tray: readonly (Shape | null)[], combo: number, beam: 
       for (let r = 0; r < SIZE; r++)
         for (let c = 0; c < SIZE; c++) {
           if (!canPlace(g, shape, r, c)) continue;
-          const res = place(g, shape, r, c, cmb);
+          const res = place(g, shape, r, c, cmb, rules.regions);
           options.push({ r, c, res, rank: res.points * 3 - clutter(res.grid) });
         }
       options.sort((x, y) => y.rank - x.rank);
@@ -58,30 +60,49 @@ function plan(grid: Grid, tray: readonly (Shape | null)[], combo: number, beam: 
   return search(grid, left, combo);
 }
 
+export interface BotRun { score: number; lines: number; moves: number; doubles: number; ones: number; dead: boolean }
+
 /**
- * Plays up to `maxMoves` placements tray by tray. `start` lets a journey level begin from a
- * pre-filled board.
+ * Plays tray by tray until `stop` says so, the move cap is hit, or nothing fits. `start` lets a
+ * journey level begin from a pre-filled board. `avoidOnes` keeps the bot off 1x1 pieces when it can.
  */
-export function greedyScore(seed: string, maxMoves = 120, start: Grid = emptyGrid(), beam = 3): SolveResult {
-  let grid = start;
-  let score = 0;
+export function playBot(opts: {
+  seed: string; maxMoves?: number; start?: Grid; beam?: number; rules?: Rules;
+  stop?: (r: BotRun) => boolean;
+}): BotRun {
+  const { seed, maxMoves = 120, beam = 3, rules = DEFAULT_RULES } = opts;
+  let grid = opts.start ?? emptyGrid();
+  const run: BotRun = { score: 0, lines: 0, moves: 0, doubles: 0, ones: 0, dead: false };
   let combo = 0;
-  let moves = 0;
   let trayNo = 0;
-  while (moves < maxMoves) {
+  while (run.moves < maxMoves) {
     const tray = drawTray(grid, seeded(`${seed}:${trayNo++}`)) as (Shape | null)[];
-    const { moves: seq } = plan(grid, tray, combo, beam);
-    if (seq.length === 0) break; // nothing fits: the game is over
+    const { moves: seq } = plan(grid, tray, combo, beam, rules);
+    if (seq.length === 0) { run.dead = true; break; }
     for (const m of seq) {
-      if (moves >= maxMoves) break;
-      const res = place(grid, tray[m.i]!, m.r, m.c, combo);
+      if (run.moves >= maxMoves) break;
+      const shape = tray[m.i]!;
+      const res = place(grid, shape, m.r, m.c, combo, rules.regions);
+      const lines = res.rowsCleared.length + res.colsCleared.length + res.regionsCleared.length;
       grid = res.grid;
-      score += res.points;
+      run.score += res.points;
+      run.lines += lines;
+      run.moves++;
+      if (lines >= 2) run.doubles++;
+      if (shape.length === 1) run.ones++;
       combo = res.combo;
-      moves++;
+      if (opts.stop?.(run)) return run;
     }
     // A plan may leave a piece unplaced; the real game would too, but then the bot is stuck.
-    if (seq.length < tray.filter(Boolean).length) break;
+    if (seq.length < tray.filter(Boolean).length) { run.dead = true; break; }
   }
-  return { score, moves };
+  return run;
+}
+
+export interface SolveResult { score: number; moves: number }
+
+/** The score a bot reaches in up to `maxMoves` placements: the basis for each day's par. */
+export function greedyScore(seed: string, maxMoves = 120, start: Grid = emptyGrid(), beam = 3): SolveResult {
+  const r = playBot({ seed, maxMoves, start, beam });
+  return { score: r.score, moves: r.moves };
 }
