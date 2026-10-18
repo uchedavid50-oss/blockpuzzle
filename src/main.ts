@@ -73,7 +73,23 @@ const makeTray = (grid: Grid, daily: string | null, n: number): Shape[] =>
   drawTray(grid, daily ? seeded(`${daily}:${n}`) : undefined);
 
 // Visual-only: which gem colour each filled cell wears. The rules never read it.
-const PALETTE = ["#4da3ff", "#9a7bff", "#ff6f9c", "#ffb04d", "#3fd6a0", "#3fd0e8", "#ff7a5c", "#a6e05a"];
+const THEMES: { name: string; colors: string[] }[] = [
+  { name: "Gems", colors: ["#4da3ff", "#9a7bff", "#ff6f9c", "#ffb04d", "#3fd6a0", "#3fd0e8", "#ff7a5c", "#a6e05a"] },
+  { name: "Neon", colors: ["#00e5ff", "#ff2bd6", "#b6ff00", "#ff7a00", "#8a5cff", "#00ff9d", "#ff3355", "#ffee00"] },
+  { name: "Pastel", colors: ["#8ecae6", "#c3a6ff", "#ffadc6", "#ffd6a5", "#9be3c0", "#a0e7f0", "#ffb5a7", "#d4e79e"] },
+  // Okabe-Ito: chosen to stay distinguishable with the common kinds of colour blindness.
+  { name: "Colour-blind", colors: ["#0072b2", "#e69f00", "#56b4e9", "#009e73", "#f0e442", "#d55e00", "#cc79a7", "#999999"] },
+];
+const THEME_KEY = "blockpuzzle.theme";
+const PALETTE: string[] = [...THEMES[0]!.colors]; // mutated in place when the theme changes
+let themeIdx = 0;
+let themeShownAt = -10;
+function applyTheme(i: number): void {
+  themeIdx = ((i % THEMES.length) + THEMES.length) % THEMES.length;
+  PALETTE.splice(0, PALETTE.length, ...THEMES[themeIdx]!.colors);
+  try { localStorage.setItem(THEME_KEY, String(themeIdx)); } catch { /* ignore */ }
+}
+try { applyTheme(Number(localStorage.getItem(THEME_KEY)) || 0); } catch { /* ignore */ }
 const blankColors = (): number[][] => Array.from({ length: SIZE }, () => Array<number>(SIZE).fill(-1));
 const blankPop = (): number[][] => Array.from({ length: SIZE }, () => Array<number>(SIZE).fill(0));
 const colorIndex = (shape: Shape): number => shapeIndex(shape) % PALETTE.length;
@@ -137,6 +153,7 @@ function load(): State | null {
 }
 
 let state: State = load() ?? newState();
+const HINT_KEY = "blockpuzzle.hintSeen";
 
 // ---- Transient effects (purely visual; never affect game logic) ---------------
 
@@ -180,10 +197,11 @@ function slotRect(i: number): { x: number; y: number; size: number } {
 }
 
 const CHIP = { x: 22, y: 64, w: 108, h: 26 };
-const undoRect = (): { x: number; y: number; w: number; h: number } => ({ x: W - 124, y: 64, w: 76, h: 26 });
+const undoRect = (): { x: number; y: number; w: number; h: number } => ({ x: W - 144, y: 64, w: 70, h: 26 });
 const inRect = (r: { x: number; y: number; w: number; h: number }, x: number, y: number): boolean =>
   x >= r.x - 4 && x <= r.x + r.w + 4 && y >= r.y - 6 && y <= r.y + r.h + 6;
 
+const THEME_C = (): [number, number] => [W - 58, 77];
 const MUTE_R = 14;
 const muteCenter = (): [number, number] => [W - 26, 77];
 
@@ -191,9 +209,11 @@ interface Snapshot { grid: Grid; tray: (Shape | null)[]; score: number; combo: n
 let snap: Snapshot | null = null;
 
 const canUndo = (): boolean => !!snap && state.undoLeft > 0 && !state.over && !drag;
+const canUndoOver = (): boolean => !!snap && state.undoLeft > 0 && state.over;
 
 function undo(): void {
-  if (!snap || !canUndo()) return;
+  if (!snap || state.undoLeft <= 0 || drag) return;
+  if (state.over) { state.over = false; overT = 0; } // take back the losing move
   state.grid = snap.grid;
   state.tray = snap.tray;
   state.score = snap.score;
@@ -215,11 +235,17 @@ function startDaily(target: string | null): void {
 }
 
 let moves = 0; // placements this session, to time the install nudge
-let overPress: "share" | "again" | "mode" | null = null;
+let overPress: "share" | "again" | "mode" | "undo" | null = null;
+let hintOn = (() => {
+  try { return localStorage.getItem(HINT_KEY) !== "1"; } catch { return false; }
+})();
+let hintT = 0;
+let hintPress = false;
 let sharedAt = -10; // clock time of the last "copied" confirmation
 
-function overHit(x: number, y: number): "share" | "again" | "mode" {
+function overHit(x: number, y: number): "share" | "again" | "mode" | "undo" {
   if (Math.abs(x - W / 2) <= 96) {
+    if (canUndoOver() && y >= H / 2 + 214 && y <= H / 2 + 262) return "undo";
     if (y >= H / 2 + 104 && y <= H / 2 + 156) return "share";
     if (y >= H / 2 + 160 && y <= H / 2 + 212) return "mode";
   }
@@ -281,11 +307,14 @@ canvas.addEventListener("pointerdown", (e) => {
   unlock(); // must happen on the gesture itself, not on pointerup
   const [mx, my] = muteCenter();
   if (Math.hypot(e.clientX - mx, e.clientY - my) <= MUTE_R + 6) { toggleMute(); return; }
+  if (hintOn) { hintPress = true; return; }
   if (state.over) {
     // Act on release, not press: share() needs a completed gesture on iOS.
     if (overT >= 0.6) overPress = overHit(e.clientX, e.clientY);
     return;
   }
+  const [tx, ty] = THEME_C();
+  if (Math.hypot(e.clientX - tx, e.clientY - ty) <= 19) { applyTheme(themeIdx + 1); themeShownAt = clock; return; }
   if (inRect(CHIP, e.clientX, e.clientY)) { startDaily(state.daily ? null : today()); return; }
   if (canUndo() && inRect(undoRect(), e.clientX, e.clientY)) { undo(); return; }
   if (drag) return;
@@ -301,11 +330,17 @@ canvas.addEventListener("pointermove", (e) => {
 });
 
 canvas.addEventListener("pointerup", (e) => {
+  if (hintPress) {
+    hintPress = false;
+    if (hintT >= 0.5) { hintOn = false; try { localStorage.setItem(HINT_KEY, "1"); } catch { /* ignore */ } }
+    return;
+  }
   if (overPress && state.over) {
     const want = overPress;
     overPress = null;
     if (overHit(e.clientX, e.clientY) !== want) return;
     if (want === "share") void shareScore();
+    else if (want === "undo") undo();
     else if (want === "mode") reset(state.daily ? null : today());
     else reset(state.daily);
     return;
@@ -559,6 +594,30 @@ function drawControls(): void {
     ctx.fillText(`\u{1F525} ${streak}`, CHIP.x + CHIP.w + 10, CHIP.y + CHIP.h / 2 + 1);
   }
   if (canUndo()) pill(undoRect(), "\u21B6 Undo", false);
+
+  // Theme button: a round chip showing four of the current colours.
+  const [tx, ty] = THEME_C();
+  ctx.fillStyle = "rgba(255,255,255,0.06)";
+  ctx.beginPath();
+  ctx.arc(tx, ty, 13, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.14)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  for (let i = 0; i < 4; i++) {
+    ctx.fillStyle = PALETTE[i]!;
+    ctx.beginPath();
+    ctx.arc(tx + (i % 2 ? 3.6 : -3.6), ty + (i < 2 ? -3.6 : 3.6), 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (clock - themeShownAt < 1.4) {
+    ctx.globalAlpha = Math.min(1, (1.4 - (clock - themeShownAt)) * 2);
+    ctx.fillStyle = COLORS.dim;
+    ctx.font = `600 12px ${FONT}`;
+    ctx.textAlign = "center";
+    ctx.fillText(`Theme: ${THEMES[themeIdx]!.name}`, W / 2, 16);
+    ctx.globalAlpha = 1;
+  }
 }
 
 function drawBoard(): void {
@@ -598,7 +657,9 @@ function drawBoard(): void {
     }
 }
 
+let dtLast = 0;
 function render(dt: number): void {
+  dtLast = dt;
   clock += dt;
   // Count the score up rather than snapping, so a big clear reads as a big clear.
   shownScore += (state.score - shownScore) * Math.min(1, dt * 8);
@@ -757,14 +818,15 @@ function render(dt: number): void {
     ctx.globalAlpha = e;
     ctx.translate(W / 2, H / 2 + (1 - e) * 24);
     const cw = Math.min(W - 48, 320);
-    const card = ctx.createLinearGradient(0, -145, 0, 225);
+    const extra = canUndoOver() ? 52 : 0;
+    const card = ctx.createLinearGradient(0, -145, 0, 225 + extra);
     card.addColorStop(0, "#222840");
     card.addColorStop(1, "#151a2a");
     ctx.shadowColor = "rgba(0,0,0,0.6)";
     ctx.shadowBlur = 40;
     ctx.fillStyle = card;
     ctx.beginPath();
-    ctx.roundRect(-cw / 2, -145, cw, 370, 26);
+    ctx.roundRect(-cw / 2, -145, cw, 370 + extra, 26);
     ctx.fill();
     ctx.shadowBlur = 0;
     ctx.strokeStyle = "rgba(255,255,255,0.09)";
@@ -806,8 +868,84 @@ function render(dt: number): void {
     ctx.fillStyle = COLORS.dim;
     ctx.font = `600 15px ${FONT}`;
     ctx.fillText(state.daily ? "Play a random game" : "Play today\u2019s daily", 0, 186);
+    if (extra) {
+      ctx.fillStyle = COLORS.combo;
+      ctx.font = `700 15px ${FONT}`;
+      ctx.fillText("\u21B6 Undo last move", 0, 238);
+    }
     ctx.restore();
   }
+
+  if (hintOn) drawHint(dtLast);
+}
+
+function drawHint(dt: number): void {
+  hintT = Math.min(1, hintT + dt * 2.2);
+  const e = 1 - Math.pow(1 - hintT, 3);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = `rgba(7,9,14,${0.86 * e})`;
+  ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  ctx.globalAlpha = e;
+  ctx.translate(W / 2, H / 2 + (1 - e) * 24);
+  const cw = Math.min(W - 40, 340);
+  ctx.shadowColor = "rgba(0,0,0,0.6)";
+  ctx.shadowBlur = 40;
+  const card = ctx.createLinearGradient(0, -190, 0, 190);
+  card.addColorStop(0, "#222840");
+  card.addColorStop(1, "#151a2a");
+  ctx.fillStyle = card;
+  ctx.beginPath();
+  ctx.roundRect(-cw / 2, -190, cw, 380, 26);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(255,255,255,0.09)";
+  ctx.stroke();
+
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+  ctx.fillStyle = COLORS.text;
+  ctx.font = `800 26px ${FONT}`;
+  ctx.fillText("How to play", 0, -148);
+
+  const steps = [
+    ["Drag", "a piece from the tray onto the board."],
+    ["Fill", "a whole row or column to clear it."],
+    ["Chain", "clears for combo bonuses. No timer, no rotating."],
+  ];
+  steps.forEach(([head, body], i) => {
+    const y = -82 + i * 62;
+    ctx.fillStyle = PALETTE[i]!;
+    ctx.beginPath();
+    ctx.arc(-cw / 2 + 36, y, 15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.font = `800 15px ${FONT}`;
+    ctx.fillText(String(i + 1), -cw / 2 + 36, y + 1);
+    ctx.textAlign = "left";
+    ctx.fillStyle = COLORS.text;
+    ctx.font = `700 15px ${FONT}`;
+    ctx.fillText(head!, -cw / 2 + 62, y - 10);
+    ctx.fillStyle = COLORS.dim;
+    ctx.font = `500 13px ${FONT}`;
+    ctx.fillText(body!, -cw / 2 + 62, y + 10, cw - 84);
+    ctx.textAlign = "center";
+  });
+  ctx.fillStyle = COLORS.dim;
+  ctx.font = `500 13px ${FONT}`;
+  ctx.fillText("The game ends when no piece fits.", 0, 106);
+
+  const bg = ctx.createLinearGradient(0, 128, 0, 176);
+  bg.addColorStop(0, "#6cb4ff");
+  bg.addColorStop(1, "#3a82e6");
+  ctx.fillStyle = bg;
+  ctx.beginPath();
+  ctx.roundRect(-84, 134, 168, 46, 23);
+  ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.font = `700 17px ${FONT}`;
+  ctx.fillText("Got it", 0, 158);
+  ctx.restore();
 }
 
 let last = performance.now();
