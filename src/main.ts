@@ -65,23 +65,37 @@ const unlocked: string[] = (() => {
 let badgesSeen = (() => { try { return Number(localStorage.getItem(SEEN_KEY)) || 0; } catch { return 0; } })();
 
 interface MoveInfo { lines: number; combo: number; perfect: boolean }
-interface Badge { id: string; name: string; desc: string; ok: (m: MoveInfo | null) => boolean }
+interface Badge {
+  id: string; name: string; desc: string; ok: (m: MoveInfo | null) => boolean;
+  progress?: () => [number, number]; // [now, target], shown as a bar while locked
+  reward?: string;
+}
 const BADGES: Badge[] = [
   { id: "first", name: "First clear", desc: "Clear your first line.", ok: () => stats.lines >= 1 },
   { id: "double", name: "Double", desc: "Clear 2 lines with one piece.", ok: (m) => !!m && m.lines >= 2 },
-  { id: "quad", name: "Quad", desc: "Clear 4 lines with one piece.", ok: (m) => !!m && m.lines >= 4 },
-  { id: "combo3", name: "On a roll", desc: "Reach a 3x combo.", ok: () => stats.bestCombo >= 3 },
-  { id: "combo5", name: "Unstoppable", desc: "Reach a 5x combo.", ok: () => stats.bestCombo >= 5 },
-  { id: "s500", name: "Sharp", desc: "Score 500 in one game.", ok: () => stats.bestScore >= 500 },
-  { id: "s1000", name: "Pro", desc: "Score 1,000 in one game.", ok: () => stats.bestScore >= 1000 },
-  { id: "s2500", name: "Legend", desc: "Score 2,500 in one game.", ok: () => stats.bestScore >= 2500 },
-  { id: "lines50", name: "Sweeper", desc: "Clear 50 lines in total.", ok: () => stats.lines >= 50 },
-  { id: "lines250", name: "Demolition", desc: "Clear 250 lines in total.", ok: () => stats.lines >= 250 },
-  { id: "games10", name: "Hooked", desc: "Play 10 games.", ok: () => stats.games >= 10 },
-  { id: "streak3", name: "Regular", desc: "Play the daily 3 days in a row.", ok: () => stats.bestStreak >= 3 },
-  { id: "streak7", name: "Devoted", desc: "Play the daily 7 days in a row.", ok: () => stats.bestStreak >= 7 },
-  { id: "perfect", name: "Spotless", desc: "Clear the entire board.", ok: () => stats.perfects >= 1 },
+  { id: "quad", name: "Quad", desc: "Clear 4 lines with one piece.", ok: (m) => !!m && m.lines >= 4, reward: "Gold confetti" },
+  { id: "combo3", name: "On a roll", desc: "Reach a 3x combo.", ok: () => stats.bestCombo >= 3, progress: () => [stats.bestCombo, 3], reward: "Sparkle trail on held pieces" },
+  { id: "combo5", name: "Unstoppable", desc: "Reach a 5x combo.", ok: () => stats.bestCombo >= 5, progress: () => [stats.bestCombo, 5], reward: "Rainbow rings" },
+  { id: "combo8", name: "Untouchable", desc: "Reach an 8x combo.", ok: () => stats.bestCombo >= 8, progress: () => [stats.bestCombo, 8] },
+  { id: "s500", name: "Sharp", desc: "Score 500 in one game.", ok: () => stats.bestScore >= 500, progress: () => [stats.bestScore, 500] },
+  { id: "s1000", name: "Pro", desc: "Score 1,000 in one game.", ok: () => stats.bestScore >= 1000, progress: () => [stats.bestScore, 1000], reward: "Gold theme" },
+  { id: "s2500", name: "Legend", desc: "Score 2,500 in one game.", ok: () => stats.bestScore >= 2500, progress: () => [stats.bestScore, 2500] },
+  { id: "s5000", name: "Mythic", desc: "Score 5,000 in one game.", ok: () => stats.bestScore >= 5000, progress: () => [stats.bestScore, 5000] },
+  { id: "lines50", name: "Sweeper", desc: "Clear 50 lines in total.", ok: () => stats.lines >= 50, progress: () => [stats.lines, 50] },
+  { id: "lines250", name: "Demolition", desc: "Clear 250 lines in total.", ok: () => stats.lines >= 250, progress: () => [stats.lines, 250] },
+  { id: "lines1000", name: "Annihilator", desc: "Clear 1,000 lines in total.", ok: () => stats.lines >= 1000, progress: () => [stats.lines, 1000] },
+  { id: "games10", name: "Hooked", desc: "Play 10 games.", ok: () => stats.games >= 10, progress: () => [stats.games, 10] },
+  { id: "streak3", name: "Regular", desc: "Play the daily 3 days in a row.", ok: () => stats.bestStreak >= 3, progress: () => [stats.bestStreak, 3] },
+  { id: "streak7", name: "Devoted", desc: "Play the daily 7 days in a row.", ok: () => stats.bestStreak >= 7, progress: () => [stats.bestStreak, 7], reward: "Aurora theme" },
+  { id: "streak30", name: "Marathon", desc: "Play the daily 30 days in a row.", ok: () => stats.bestStreak >= 30, progress: () => [stats.bestStreak, 30] },
+  { id: "perfect", name: "Spotless", desc: "Clear the entire board.", ok: () => stats.perfects >= 1, reward: "Midnight theme" },
 ];
+
+const has = (id: string): boolean => unlocked.includes(id);
+/** Every 5 badges earns one extra undo at the start of each random (non-daily) game, up to +2. */
+const perkUndos = (): number => Math.min(2, Math.floor(unlocked.length / 5));
+const RANKS: [number, string][] = [[0, "Rookie"], [1, "Beginner"], [3, "Player"], [6, "Skilled"], [9, "Expert"], [12, "Master"], [16, "Grandmaster"]];
+const rankName = (): string => [...RANKS].reverse().find(([n]) => unlocked.length >= n)![1];
 
 interface Toast { title: string; desc: string; t: number }
 let toasts: Toast[] = [];
@@ -91,8 +105,10 @@ function checkBadges(m: MoveInfo | null): void {
   let any = false;
   for (const b of BADGES) {
     if (unlocked.includes(b.id) || !b.ok(m)) continue;
+    const before = perkUndos();
     unlocked.push(b.id);
-    toasts.push({ title: b.name, desc: b.desc, t: 0 });
+    toasts.push({ title: b.name, desc: b.reward ? `Unlocked: ${b.reward}` : b.desc, t: 0 });
+    if (perkUndos() > before) toasts.push({ title: "Extra undo earned", desc: "Random games now start with more undos.", t: 0 });
     any = true;
   }
   if (!any) return;
@@ -142,23 +158,40 @@ const makeTray = (grid: Grid, daily: string | null, n: number): Shape[] =>
   drawTray(grid, daily ? seeded(`${daily}:${n}`) : undefined);
 
 // Visual-only: which gem colour each filled cell wears. The rules never read it.
-const THEMES: { name: string; colors: string[] }[] = [
+const THEMES: { name: string; colors: string[]; req?: string }[] = [
   { name: "Gems", colors: ["#4da3ff", "#9a7bff", "#ff6f9c", "#ffb04d", "#3fd6a0", "#3fd0e8", "#ff7a5c", "#a6e05a"] },
   { name: "Neon", colors: ["#00e5ff", "#ff2bd6", "#b6ff00", "#ff7a00", "#8a5cff", "#00ff9d", "#ff3355", "#ffee00"] },
   { name: "Pastel", colors: ["#8ecae6", "#c3a6ff", "#ffadc6", "#ffd6a5", "#9be3c0", "#a0e7f0", "#ffb5a7", "#d4e79e"] },
   // Okabe-Ito: chosen to stay distinguishable with the common kinds of colour blindness.
+  { name: "Gold", req: "s1000", colors: ["#ffd75e", "#ff9f43", "#f6c177", "#e8b4a0", "#c9a227", "#ffe9a0", "#d4884a", "#b8860b"] },
+  { name: "Aurora", req: "streak7", colors: ["#3ef5c0", "#4ad1ff", "#7c6bff", "#c45bff", "#ff6bd6", "#57ffa0", "#39b3ff", "#a2ff5e"] },
+  { name: "Midnight", req: "perfect", colors: ["#5b7cff", "#8a5bff", "#2ec8ff", "#ff4fa3", "#31e6c1", "#ffd34f", "#7aa2ff", "#c06bff"] },
   { name: "Colour-blind", colors: ["#0072b2", "#e69f00", "#56b4e9", "#009e73", "#f0e442", "#d55e00", "#cc79a7", "#999999"] },
 ];
 const THEME_KEY = "blockpuzzle.theme";
 const PALETTE: string[] = [...THEMES[0]!.colors]; // mutated in place when the theme changes
 let themeIdx = 0;
 let themeShownAt = -10;
+const themeUnlocked = (i: number): boolean => !THEMES[i]!.req || has(THEMES[i]!.req!);
+/** Next theme you have unlocked, wrapping around. */
+function cycleTheme(): void {
+  for (let k = 1; k <= THEMES.length; k++) {
+    const i = (themeIdx + k) % THEMES.length;
+    if (themeUnlocked(i)) { applyTheme(i); return; }
+  }
+}
 function applyTheme(i: number): void {
   themeIdx = ((i % THEMES.length) + THEMES.length) % THEMES.length;
+  if (!themeUnlocked(themeIdx)) themeIdx = 0;
   PALETTE.splice(0, PALETTE.length, ...THEMES[themeIdx]!.colors);
-  try { localStorage.setItem(THEME_KEY, String(themeIdx)); } catch { /* ignore */ }
+  try { localStorage.setItem(THEME_KEY, THEMES[themeIdx]!.name); } catch { /* ignore */ }
 }
-try { applyTheme(Number(localStorage.getItem(THEME_KEY)) || 0); } catch { /* ignore */ }
+try {
+  // Saved by name. Older versions saved a position (0-3), where 3 was the colour-blind palette.
+  const saved = localStorage.getItem(THEME_KEY) ?? "";
+  const byName = THEMES.findIndex((t) => t.name === saved);
+  applyTheme(byName >= 0 ? byName : saved === "3" ? THEMES.findIndex((t) => t.name === "Colour-blind") : Number(saved) || 0);
+} catch { /* ignore */ }
 const blankColors = (): number[][] => Array.from({ length: SIZE }, () => Array<number>(SIZE).fill(-1));
 const blankPop = (): number[][] => Array.from({ length: SIZE }, () => Array<number>(SIZE).fill(0));
 const colorIndex = (shape: Shape): number => shapeIndex(shape) % PALETTE.length;
@@ -171,7 +204,7 @@ function newState(daily: string | null = null): State {
   pop = blankPop();
   startBest = loadBest(daily);
   const grid = emptyGrid();
-  return { grid, tray: makeTray(grid, daily, 0), score: 0, best: loadBest(daily), combo: 0, over: false, daily, trays: 1, undoLeft: 1 };
+  return { grid, tray: makeTray(grid, daily, 0), score: 0, best: loadBest(daily), combo: 0, over: false, daily, trays: 1, undoLeft: daily ? 1 : 1 + perkUndos() };
 }
 
 // ---- Saving a game in progress ------------------------------------------------
@@ -417,7 +450,7 @@ canvas.addEventListener("pointerdown", (e) => {
     return;
   }
   const [tx, ty] = THEME_C();
-  if (Math.hypot(e.clientX - tx, e.clientY - ty) <= 19) { applyTheme(themeIdx + 1); themeShownAt = clock; haptics.tick(); return; }
+  if (Math.hypot(e.clientX - tx, e.clientY - ty) <= 19) { cycleTheme(); themeShownAt = clock; haptics.tick(); return; }
   if (inRect(CHIP, e.clientX, e.clientY)) { startDaily(state.daily ? null : today()); return; }
   if (canUndo() && inRect(undoRect(), e.clientX, e.clientY)) { undo(); return; }
   if (drag) return;
@@ -455,8 +488,8 @@ canvas.addEventListener("pointerup", (e) => {
     if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 12) return;
     const i = hit(lx, ly);
     if (i >= 0) { badgeSel = badgeSel === i ? -1 : i; haptics.tick(); return; }
-    const inCard = Math.abs(lx) <= l.cw / 2 && ly >= -300 && ly <= 300;
-    const onClose = Math.abs(lx) <= 90 && ly >= 244 && ly <= 292;
+    const inCard = Math.abs(lx) <= l.cw / 2 && ly >= -CARD_H / 2 && ly <= CARD_H / 2;
+    const onClose = Math.abs(lx) <= 90 && ly >= 284 && ly <= 336;
     if (!inCard || onClose) statsOn = false;
     return;
   }
@@ -539,7 +572,7 @@ canvas.addEventListener("pointerup", (e) => {
         sy += boardY + (r + 0.5) * cell;
         colorGrid[r]![c] = -1;
       }
-      rings.push({ x: sx / list.length, y: sy / list.length, t: 0, max: cell * (2.2 + lines * 0.5), color: lines >= 2 ? COLORS.combo : "#ffffff", w: 2.5 + lines * 0.5 });
+      rings.push({ x: sx / list.length, y: sy / list.length, t: 0, max: cell * (2.2 + lines * 0.5), color: has("combo5") ? rainbow(0) : lines >= 2 ? COLORS.combo : "#ffffff", w: 2.5 + lines * 0.5 });
       floaters.push({ x: sx / list.length, y: sy / list.length, text: `+${res.points + (perfect ? PERFECT_BONUS : 0)}`, sub: "", t: 0 });
 
       // Praise banner, scaled to how well that move went.
@@ -556,7 +589,7 @@ canvas.addEventListener("pointerup", (e) => {
             const v = 200 + Math.random() * 380;
             particles.push({
               x: W / 2, y: boardY + (cell * SIZE) / 2, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 120, life: 1.6,
-              size: 5 + Math.random() * 6, color: i % 2 ? "#ffd75e" : PALETTE[i % PALETTE.length]!,
+              size: 5 + Math.random() * 6, color: has("quad") ? GOLDS[i % GOLDS.length]! : i % 2 ? "#ffd75e" : PALETTE[i % PALETTE.length]!,
               star: true, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 14, g: 480,
             });
           }
@@ -572,7 +605,7 @@ canvas.addEventListener("pointerup", (e) => {
           const v = 220 + Math.random() * 320;
           particles.push({
             x: sx / list.length, y: sy / list.length, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1.4,
-            size: 5 + Math.random() * 5, color: i % 3 === 0 ? "#ffd75e" : PALETTE[i % PALETTE.length]!,
+            size: 5 + Math.random() * 5, color: has("quad") ? GOLDS[i % GOLDS.length]! : i % 3 === 0 ? "#ffd75e" : PALETTE[i % PALETTE.length]!,
             star: true, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 12, g: 520,
           });
         }
@@ -820,7 +853,7 @@ function drawControls(): void {
     ctx.textBaseline = "middle";
     ctx.fillText(`\u{1F525} ${streak}`, CHIP.x + CHIP.w + 10, CHIP.y + CHIP.h / 2 + 1);
   }
-  if (canUndo()) pill(undoRect(), "\u21B6 Undo", false);
+  if (canUndo()) pill(undoRect(), `\u21B6 Undo${state.undoLeft > 1 ? ` ${state.undoLeft}` : ""}`, false);
 
   // Theme button: a round chip showing four of the current colours.
   const [tx, ty] = THEME_C();
@@ -893,6 +926,9 @@ function drawBoard(): void {
 }
 
 /** Sparks and dots flying out of a cleared cell; bigger clears throw more, faster. */
+const rainbow = (i: number): string => `hsl(${(i * 47 + Math.floor(clock * 120)) % 360},95%,66%)`;
+const GOLDS = ["#ffd75e", "#ffe9a0", "#ffbf3a", "#fff3c4"];
+
 function burst(x: number, y: number, color: string, lines: number): void {
   if (reduceMotion) return;
   const n = 5 + lines * 2;
@@ -920,7 +956,7 @@ function render(dt: number): void {
       if (!cc.fired && cl.t >= cc.delay) {
         cc.fired = true;
         if (cl.count++ % 2 === 0) sfx.tick(cl.count >> 1);
-        if (!reduceMotion) rings.push({ x: boardX + (cc.c + 0.5) * cell, y: boardY + (cc.r + 0.5) * cell, t: 0, max: cell * 0.85, color: PALETTE[cc.ci < 0 ? 0 : cc.ci]!, w: 2 });
+        if (!reduceMotion) rings.push({ x: boardX + (cc.c + 0.5) * cell, y: boardY + (cc.r + 0.5) * cell, t: 0, max: cell * 0.85, color: has("combo5") ? rainbow(cl.count) : PALETTE[cc.ci < 0 ? 0 : cc.ci]!, w: 2 });
         burst(boardX + (cc.c + 0.5) * cell, boardY + (cc.r + 0.5) * cell, PALETTE[cc.ci < 0 ? 0 : cc.ci]!, cl.lines);
       }
   }
@@ -1048,6 +1084,15 @@ function render(dt: number): void {
       r.x0 + (slot.x + slot.size / 2 - r.x0) * e + (reduceMotion ? 0 : Math.sin(r.t * 30) * 7 * (1 - r.t)),
       r.y0 + (slot.y + slot.size / 2 - r.y0) * e,
       r.s0 + (trayCell - r.s0) * e, r.color);
+  }
+
+  if (drag && has("combo3") && !reduceMotion && Math.random() < 0.7) {
+    const d = dragDraw(drag);
+    particles.push({
+      x: d.cx + (Math.random() - 0.5) * d.s * 1.6, y: d.cy + (Math.random() - 0.5) * d.s * 1.6,
+      vx: (Math.random() - 0.5) * 30, vy: -10 - Math.random() * 30, life: 0.55, size: 1.5 + Math.random() * 2.5,
+      color: Math.random() < 0.5 ? "#ffffff" : PALETTE[colorIndex(drag.shape)]!, g: 20,
+    });
   }
 
   if (drag) {
@@ -1284,13 +1329,15 @@ function drawToast(t: Toast): void {
 
 // ---- Stats screen ------------------------------------------------------------------
 
-/** Card is laid out in a 600-unit-tall box and scaled down to fit short screens. */
+const CARD_H = 680;
+/** Card is laid out in a 680-unit-tall box and scaled down to fit short screens. */
 function statsLayout(): { k: number; cw: number } {
-  return { k: Math.min(1, (H - 24) / 600), cw: Math.min((W - 24) / Math.min(1, (H - 24) / 600), 360) };
+  const k = Math.min(1, (H - 24) / CARD_H);
+  return { k, cw: Math.min((W - 24) / k, 360) };
 }
 function badgeCell(i: number, l: { cw: number }): { x: number; y: number; w: number } {
   const w = (l.cw - 32) / 4;
-  return { x: -l.cw / 2 + 16 + w * (i % 4) + w / 2, y: -50 + Math.floor(i / 4) * 62, w };
+  return { x: -l.cw / 2 + 16 + w * (i % 4) + w / 2, y: -86 + Math.floor(i / 4) * 62, w };
 }
 
 function drawStats(): void {
@@ -1304,14 +1351,15 @@ function drawStats(): void {
   ctx.translate(W / 2, H / 2 + (1 - e) * 24);
   ctx.scale(l.k, l.k);
   const cw = l.cw;
-  const card = ctx.createLinearGradient(0, -300, 0, 300);
+  const top = -CARD_H / 2;
+  const card = ctx.createLinearGradient(0, top, 0, -top);
   card.addColorStop(0, "#222840");
   card.addColorStop(1, "#151a2a");
   ctx.shadowColor = "rgba(0,0,0,0.6)";
   ctx.shadowBlur = 40;
   ctx.fillStyle = card;
   ctx.beginPath();
-  ctx.roundRect(-cw / 2, -300, cw, 600, 26);
+  ctx.roundRect(-cw / 2, top, cw, CARD_H, 26);
   ctx.fill();
   ctx.shadowBlur = 0;
   ctx.strokeStyle = "rgba(255,255,255,0.09)";
@@ -1322,7 +1370,11 @@ function drawStats(): void {
   ctx.textAlign = "center";
   ctx.fillStyle = COLORS.text;
   ctx.font = `800 24px ${FONT}`;
-  ctx.fillText("Your stats", 0, -268);
+  ctx.fillText("Your stats", 0, -312);
+  ctx.fillStyle = COLORS.combo;
+  ctx.font = `700 13px ${FONT}`;
+  const perk = perkUndos();
+  ctx.fillText(`Rank: ${rankName()}${perk ? `  \u00B7  +${perk} undo${perk > 1 ? "s" : ""} in random games` : ""}`, 0, -285, cw - 40);
 
   const avg = stats.finished ? Math.round(stats.total / stats.finished) : 0;
   const tiles: [string, string][] = [
@@ -1332,7 +1384,7 @@ function drawStats(): void {
   const tw = (cw - 48 - 20) / 3;
   tiles.forEach(([name, value], i) => {
     const x = -cw / 2 + 24 + (i % 3) * (tw + 10);
-    const y = -235 + Math.floor(i / 3) * 74;
+    const y = -258 + Math.floor(i / 3) * 74;
     ctx.fillStyle = "rgba(255,255,255,0.05)";
     ctx.beginPath();
     ctx.roundRect(x, y, tw, 64, 14);
@@ -1348,11 +1400,11 @@ function drawStats(): void {
   ctx.textAlign = "left";
   ctx.fillStyle = COLORS.text;
   ctx.font = `800 15px ${FONT}`;
-  ctx.fillText("Badges", -cw / 2 + 24, -70);
+  ctx.fillText("Badges", -cw / 2 + 24, -106);
   ctx.textAlign = "right";
   ctx.fillStyle = COLORS.dim;
   ctx.font = `700 13px ${FONT}`;
-  ctx.fillText(`${unlocked.length} / ${BADGES.length}`, cw / 2 - 24, -70);
+  ctx.fillText(`${unlocked.length} / ${BADGES.length}`, cw / 2 - 24, -106);
 
   ctx.textAlign = "center";
   BADGES.forEach((b, i) => {
@@ -1371,36 +1423,64 @@ function drawStats(): void {
       ctx.fillStyle = g;
       ctx.shadowColor = "rgba(255,180,46,0.6)";
       ctx.shadowBlur = 12;
-      star(c.x, c.y + 18, 17);
+      star(c.x, c.y + 16, 16);
       ctx.fill();
       ctx.shadowBlur = 0;
     } else {
       ctx.strokeStyle = "rgba(255,255,255,0.2)";
       ctx.lineWidth = 1.5;
-      star(c.x, c.y + 18, 16);
+      star(c.x, c.y + 16, 15);
       ctx.stroke();
+      const pr = b.progress?.();
+      if (pr) {
+        // Progress toward a locked badge.
+        const bw = c.w - 22;
+        ctx.fillStyle = "rgba(255,255,255,0.1)";
+        ctx.beginPath();
+        ctx.roundRect(c.x - bw / 2, c.y + 50, bw, 4, 2);
+        ctx.fill();
+        ctx.fillStyle = COLORS.combo;
+        ctx.beginPath();
+        ctx.roundRect(c.x - bw / 2, c.y + 50, Math.max(3, bw * Math.min(1, pr[0] / pr[1])), 4, 2);
+        ctx.fill();
+      }
     }
     ctx.fillStyle = got ? COLORS.text : "#586079";
     ctx.font = `600 11px ${FONT}`;
-    ctx.fillText(b.name, c.x, c.y + 48, c.w - 4);
+    ctx.fillText(b.name, c.x, c.y + 39, c.w - 4);
   });
 
+  const sel = badgeSel >= 0 ? BADGES[badgeSel] : undefined;
   ctx.fillStyle = COLORS.dim;
   ctx.font = `500 13px ${FONT}`;
-  const sel = badgeSel >= 0 ? BADGES[badgeSel] : undefined;
-  ctx.fillText(sel ? `${sel.name}: ${sel.desc}` : "Tap a badge to see how to earn it.", 0, 222, cw - 40);
+  ctx.fillText(sel ? `${sel.name}: ${sel.desc}` : "Tap a badge to see how to earn it.", 0, 252, cw - 40);
+  if (sel) {
+    const pr = sel.progress?.();
+    const got = unlocked.includes(sel.id);
+    ctx.fillStyle = COLORS.combo;
+    ctx.font = `700 12px ${FONT}`;
+    const bits = [
+      got ? "Earned" : pr ? `Progress ${Math.min(pr[0], pr[1]).toLocaleString()} / ${pr[1].toLocaleString()}` : "",
+      sel.reward ? `Reward: ${sel.reward}` : "",
+    ].filter(Boolean);
+    ctx.fillText(bits.join("  \u00B7  "), 0, 274, cw - 40);
+  } else {
+    ctx.fillStyle = COLORS.dim;
+    ctx.font = `500 12px ${FONT}`;
+    ctx.fillText("Every 5 badges: +1 undo in random games.", 0, 274, cw - 40);
+  }
 
-  const bg = ctx.createLinearGradient(0, 244, 0, 290);
+  const bg = ctx.createLinearGradient(0, 288, 0, 332);
   bg.addColorStop(0, "#6cb4ff");
   bg.addColorStop(1, "#3a82e6");
   ctx.fillStyle = bg;
   ctx.beginPath();
-  ctx.roundRect(-84, 246, 168, 44, 22);
+  ctx.roundRect(-84, 290, 168, 42, 21);
   ctx.fill();
   ctx.fillStyle = "#fff";
   ctx.font = `700 16px ${FONT}`;
   ctx.textAlign = "center";
-  ctx.fillText("Close", 0, 269);
+  ctx.fillText("Close", 0, 312);
   ctx.restore();
 }
 
