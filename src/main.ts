@@ -124,6 +124,29 @@ function slotRect(i: number): { x: number; y: number; size: number } {
 const MUTE_R = 14;
 const muteCenter = (): [number, number] => [W - 26, 70];
 
+let overPress: "share" | "again" | null = null;
+let sharedAt = -10; // clock time of the last "copied" confirmation
+
+const hitsShare = (x: number, y: number): boolean =>
+  Math.abs(x - W / 2) <= 96 && y >= H / 2 + 104 && y <= H / 2 + 156;
+
+async function shareScore(): Promise<void> {
+  const text = `I scored ${state.score} in Block Puzzle. Can you beat it?`;
+  const url = location.origin;
+  try {
+    if (navigator.share) {
+      await navigator.share({ text, url });
+    } else {
+      await navigator.clipboard.writeText(`${text} ${url}`);
+      sharedAt = clock;
+    }
+  } catch (err) {
+    // A cancelled share sheet is not an error; anything else falls back to copying.
+    if ((err as DOMException)?.name === "AbortError") return;
+    try { await navigator.clipboard.writeText(`${text} ${url}`); sharedAt = clock; } catch { /* ignore */ }
+  }
+}
+
 function reset(): void {
   state = newState();
   shownScore = 0;
@@ -159,7 +182,11 @@ canvas.addEventListener("pointerdown", (e) => {
   unlock(); // must happen on the gesture itself, not on pointerup
   const [mx, my] = muteCenter();
   if (Math.hypot(e.clientX - mx, e.clientY - my) <= MUTE_R + 6) { toggleMute(); return; }
-  if (state.over) { reset(); return; }
+  if (state.over) {
+    // Act on release, not press: share() needs a completed gesture on iOS.
+    if (overT >= 0.6) overPress = hitsShare(e.clientX, e.clientY) ? "share" : "again";
+    return;
+  }
   if (drag) return;
   const slot = slotAt(e.clientX, e.clientY);
   const shape = slot >= 0 ? state.tray[slot] : null;
@@ -173,6 +200,14 @@ canvas.addEventListener("pointermove", (e) => {
 });
 
 canvas.addEventListener("pointerup", (e) => {
+  if (overPress && state.over) {
+    const want = overPress;
+    overPress = null;
+    const onShare = hitsShare(e.clientX, e.clientY);
+    if (want === "share" && onShare) void shareScore();
+    else if (want === "again" && !onShare) reset();
+    return;
+  }
   if (!drag || e.pointerId !== drag.pointerId) return;
   drag.px = e.clientX; drag.py = e.clientY;
   const t = dragTarget();
@@ -559,14 +594,14 @@ function render(dt: number): void {
     ctx.globalAlpha = e;
     ctx.translate(W / 2, H / 2 + (1 - e) * 24);
     const cw = Math.min(W - 48, 320);
-    const card = ctx.createLinearGradient(0, -130, 0, 130);
+    const card = ctx.createLinearGradient(0, -145, 0, 165);
     card.addColorStop(0, "#222840");
     card.addColorStop(1, "#151a2a");
     ctx.shadowColor = "rgba(0,0,0,0.6)";
     ctx.shadowBlur = 40;
     ctx.fillStyle = card;
     ctx.beginPath();
-    ctx.roundRect(-cw / 2, -135, cw, 270, 26);
+    ctx.roundRect(-cw / 2, -145, cw, 310, 26);
     ctx.fill();
     ctx.shadowBlur = 0;
     ctx.strokeStyle = "rgba(255,255,255,0.09)";
@@ -585,16 +620,25 @@ function render(dt: number): void {
     ctx.font = `600 14px ${FONT}`;
     ctx.fillText(`Best ${state.best}`, 0, 8);
 
-    const bgrad = ctx.createLinearGradient(0, 50, 0, 100);
+    const bgrad = ctx.createLinearGradient(0, 40, 0, 94);
     bgrad.addColorStop(0, "#6cb4ff");
     bgrad.addColorStop(1, "#3a82e6");
     ctx.fillStyle = bgrad;
     ctx.beginPath();
-    ctx.roundRect(-96, 52, 192, 54, 27);
+    ctx.roundRect(-96, 40, 192, 54, 27);
     ctx.fill();
     ctx.fillStyle = "#fff";
     ctx.font = `700 18px ${FONT}`;
-    ctx.fillText("Play again", 0, 80);
+    ctx.fillText("Play again", 0, 68);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.22)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(-96, 108, 192, 46, 23);
+    ctx.stroke();
+    ctx.fillStyle = clock - sharedAt < 1.8 ? "#7fe3a8" : COLORS.text;
+    ctx.font = `600 16px ${FONT}`;
+    ctx.fillText(clock - sharedAt < 1.8 ? "Copied to clipboard" : "Share score", 0, 131);
     ctx.restore();
   }
 }
