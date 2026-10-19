@@ -1178,7 +1178,7 @@ function drawNode(n: number): void {
 }
 
 /** The player's piece: a glossy block in a white pin, hopping along as it travels. */
-/** Blip, the cartoon character: stands beside the current level, hops between levels, cheers on arrival. */
+/** Bun, the cartoon rabbit: stands beside the current level, hops between levels, cheers on arrival. */
 function drawToken(): void {
   const hs = hopState();
   const t = hs.t;
@@ -1206,7 +1206,7 @@ function drawToken(): void {
   const mode: MascotMode = walk ? (hs.moving ? "hop" : walk.unlocked ? "cheer" : "idle") : "idle";
 
   shadow(px, groundY, 17 * depth * Math.max(0.4, 1 - arc / (110 * depth)));
-  const k = 0.95 * depth;
+  const k = 1.05 * depth;
   ctx.save();
   ctx.translate(px, groundY - arc);
   ctx.scale(face * k, k);
