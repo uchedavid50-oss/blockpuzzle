@@ -9,7 +9,9 @@ import { readJourney, type JourneyData } from "./records";
 import { PALETTE } from "./progress";
 import { sfx } from "./sound";
 import { haptic, haptics } from "./haptics";
-import { LEVELS_PER_WORLD, WORLDS, decorFor, mapLength, nodeStatus, opensWorld, pathX, worldIndex, worldOf, worldProgress, worldStart, type Decoration, type NodeStatus, type Particle } from "./map";
+import { drawMascot, type MascotMode } from "./mascot";
+import { drawLandmark } from "./structures";
+import { LEVELS_PER_WORLD, WORLDS, decorFor, landmarkFor, mapLength, nodeStatus, opensWorld, pathX, worldIndex, worldOf, worldProgress, worldStart, type Decoration, type Landmark, type NodeStatus, type Particle } from "./map";
 
 const GAP = 112; // pixels between consecutive levels
 const FOOT = 150; // level 1 sits this far above the bottom edge when scrolled all the way down
@@ -148,7 +150,9 @@ export function openMap(cleared?: { level: number; stars: number }): void {
   try { hintOn = !cleared && localStorage.getItem(MAP_HINT_KEY) !== "1"; } catch { hintOn = false; }
   if (cleared && j.next === cleared.level + 1 && !reduceMotion) {
     // This win opened a new level: its stars land, then the token walks on to the next node.
-    walk = { from: cleared.level, to: j.next, t: 0, dur: 0.9, stars: cleared.stars, unlocked: false, cardAt: -1 };
+    walk = { from: cleared.level, to: j.next, t: 0, dur: 0.5 + 0.6 * Math.max(1, Math.round(Math.abs(j.next - cleared.level))), stars: cleared.stars, unlocked: false, cardAt: -1 };
+    lastSeg = -1;
+    lastLand = -1;
     cam = camFor(cleared.level);
   } else {
     cam = camFor(j.next);
@@ -367,13 +371,26 @@ function status(n: number): NodeStatus {
 
 const nextOnScreen = (): boolean => { const y = sy(walk && !walk.unlocked ? walk.from : j.next); return y > horizonY() + 24 && y < H - 20; };
 
-/** Where the player's token stands, in levels: on the current node, or partway along the road. */
-function tokenT(): number {
-  if (!walk) return j.next;
+interface Hop { t: number; u: number; seg: number; segs: number; moving: boolean }
+let lastSeg = -1; // the hop the character is on, to spot take-offs
+let lastLand = -1; // the last hop whose landing has been celebrated
+
+/** Where the character is, in levels, and how far through its current hop (0..1). It hops level to level. */
+function hopState(): Hop {
+  if (!walk) return { t: j.next, u: 0, seg: 0, segs: 1, moving: false };
+  const segs = Math.max(1, Math.round(Math.abs(walk.to - walk.from)));
   const k = Math.max(0, Math.min(1, (walk.t - 0.95) / walk.dur));
-  const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
-  return walk.from + (walk.to - walk.from) * e;
+  if (k <= 0) return { t: walk.from, u: 0, seg: 0, segs, moving: false };
+  if (k >= 1) return { t: walk.to, u: 1, seg: segs - 1, segs, moving: false };
+  const ks = k * segs;
+  const seg = Math.min(segs - 1, Math.floor(ks));
+  const u = ks - seg;
+  const e = reduceMotion ? u : u * u * (3 - 2 * u) * 0.3 + u * 0.7; // mostly even, soft at the ends
+  return { t: walk.from + ((walk.to - walk.from) * (seg + e)) / segs, u, seg, segs, moving: true };
 }
+
+/** Where the player's character stands, in levels. */
+const tokenT = (): number => hopState().t;
 
 function burst(x: number, y: number, n: number, colors: string[], power = 1): void {
   if (reduceMotion) return;
@@ -448,6 +465,19 @@ function update(dt: number): void {
         haptic(10);
       }
     }
+    const hs = hopState();
+    if (hs.moving && hs.seg !== lastSeg) {
+      lastSeg = hs.seg; // take-off: a puff of dust at the feet
+      burst(nx(hs.t), sy(hs.t) - 4, 6, ["#ffffff", "#f4e3b5"], 0.35);
+      sfx.pick();
+    }
+    if (hs.moving && hs.u > 0.88 && hs.seg !== lastLand) {
+      lastLand = hs.seg; // landing: the node it lands on bounces
+      const landT = walk.from + ((walk.to - walk.from) * (hs.seg + 1)) / hs.segs;
+      burst(nx(landT), sy(landT), 9, [worldOf(Math.round(landT)).accent, "#ffffff", "#ffd75e"], 0.45);
+      bounces.set(Math.round(landT), 0);
+      haptics.tick();
+    }
     goal = camFor(tokenT());
     if (!walk.unlocked && walk.t >= 0.95 + walk.dur) {
       walk.unlocked = true;
@@ -456,7 +486,7 @@ function update(dt: number): void {
       burst(nx(walk.to), sy(walk.to), 26, [w.accent, "#ffffff", "#ffd75e", ...PALETTE.slice(0, 3)], 1);
       sfx.praise(3);
       haptic([20, 30, 40]);
-      walk.cardAt = walk.t + 0.55;
+      walk.cardAt = walk.t + 1.1; // long enough to see the character cheer
     }
     if (walk.unlocked && walk.t >= walk.cardAt && card === null && popup === null) {
       const to = walk.to;
@@ -1148,30 +1178,64 @@ function drawNode(n: number): void {
 }
 
 /** The player's piece: a glossy block in a white pin, hopping along as it travels. */
+/** Blip, the cartoon character: stands beside the current level, hops between levels, cheers on arrival. */
 function drawToken(): void {
-  const t = tokenT();
-  const x = nx(t);
-  const y = dy(t);
+  const hs = hopState();
+  const t = hs.t;
   const depth = ky(t);
   if (depth < 0.32) return;
-  const travelling = walk !== null && t > walk.from && t < walk.to;
-  const hop = reduceMotion ? 0 : travelling ? Math.abs(Math.sin((t - (walk?.from ?? 0)) * Math.PI * 2)) * 16 : Math.abs(Math.sin(clock * 2.6)) * 7;
-  const lift = R * 1.15 + 30 + hop;
+  const baseX = nx(t);
+  const groundY = dy(t) - 3 * depth;
+  const side = baseX > W - 78 ? -1 : 1; // stand on whichever side of the node has room
+  const px = baseX + side * 32 * depth;
+  const hopping = walk !== null && hs.moving;
+  const arc = hopping && !reduceMotion ? Math.sin(Math.PI * hs.u) * 60 * depth : 0;
+  const target = walk ? walk.to : Math.min(length(), j.next + 1);
+  const face = nx(target) >= baseX ? 1 : -1; // looks toward where it is heading
+
+  // squash and stretch through the hop: crouch, stretch in the air, squash on landing
+  let sqy = 1;
+  if (hopping && !reduceMotion) {
+    const u = hs.u;
+    const crouch = u < 0.18 ? Math.sin((u / 0.18) * Math.PI) : 0;
+    const land = u > 0.82 ? Math.sin(((u - 0.82) / 0.18) * Math.PI) : 0;
+    sqy = 1 - 0.2 * crouch + 0.1 * Math.sin(Math.PI * u) - 0.22 * land;
+  } else if (!reduceMotion) {
+    sqy = 1 + Math.sin(clock * 2.6) * 0.012;
+  }
+  const mode: MascotMode = walk ? (hs.moving ? "hop" : walk.unlocked ? "cheer" : "idle") : "idle";
+
+  shadow(px, groundY, 17 * depth * Math.max(0.4, 1 - arc / (110 * depth)));
+  const k = 0.95 * depth;
+  ctx.save();
+  ctx.translate(px, groundY - arc);
+  ctx.scale(face * k, k);
+  drawMascot({
+    mode, clock, hop: hs.u, squashX: 1 / Math.pow(Math.max(0.5, sqy), 0.6), squashY: sqy, look: 0.9,
+    color: PALETTE[0]!, wave: !walk && clock % 7 > 5.6 && !reduceMotion,
+  });
+  ctx.restore();
+  if (hopping && !reduceMotion && Math.random() < 0.45)
+    sparks.push({ x: px + (Math.random() - 0.5) * 18, y: groundY - arc - 26 * depth, vx: (Math.random() - 0.5) * 30, vy: 10 + Math.random() * 20, life: 0.55, size: 2 + Math.random() * 2, color: Math.random() < 0.5 ? "#ffffff" : "#ffd75e", star: true, rot: Math.random() * 6 });
+}
+
+/** A big cartoon building beside the road. */
+function drawLandmarkAt(lm: Landmark): void {
+  const x = W / 2 + (sx(lm.x) - W / 2) * pinchAt(lm.y);
+  const y = dy(lm.y);
+  if (y < -150 || y > H + 60) return;
+  const depth = ky(lm.y);
+  if (depth < 0.31) return; // on the horizon: not up yet
+  const grow = appear(lm.y + 0.3);
+  if (grow <= 0) return;
+  const k = 0.82 * depth;
+  shadow(x, y, 46 * k * grow);
   ctx.save();
   ctx.translate(x, y);
-  ctx.scale(depth, depth);
-  ctx.translate(18, -lift);
-  const squash = reduceMotion ? 1 : 1 + Math.sin(clock * 5.2) * 0.03;
-  ctx.scale(1 / squash, squash);
-  ctx.shadowColor = "rgba(0,0,0,0.35)"; ctx.shadowBlur = 10; ctx.shadowOffsetY = 4;
-  ctx.fillStyle = "#ffffff";
-  ctx.beginPath();
-  ctx.arc(0, 0, 21, Math.PI * 0.78, Math.PI * 2.22);
-  ctx.lineTo(0, 30);
-  ctx.closePath();
-  ctx.fill();
-  ctx.shadowColor = "transparent";
-  block(-14, -15, 28, PALETTE[0]!);
+  if (grow < 1) ctx.scale(0.6 + 0.4 * grow, easeOutBack(grow));
+  if (!reduceMotion) ctx.rotate(Math.max(-0.2, Math.min(0.2, speed * 0.0001))); // the wind of the scroll
+  ctx.scale(lm.flip ? -k : k, k);
+  drawLandmark(lm.kind, clock + lm.phase);
   ctx.restore();
 }
 
@@ -1659,10 +1723,15 @@ export function drawMap(dt: number): void {
     for (const d of decorFor(Math.max(1, n))) decos.push({ d: n === 0 ? { ...d, y: d.y - 1 } : d, n, side: false });
     if (wide) for (const d of decorFor(Math.max(1, n) + 1050)) decos.push({ d: { ...d, y: d.y - 1050 - (n === 0 ? 1 : 0) }, n, side: true });
   }
-  decos.sort((a, b) => b.d.y - a.d.y); // further up the screen first, so nearer things overlap them
+  const scene: { y: number; draw: () => void }[] = decos.map(({ d, n, side }) => ({ y: d.y, draw: () => drawDeco(d, worldOf(Math.max(1, n)), side) }));
+  for (let n = Math.max(1, Math.floor(lo) - 1); n <= Math.min(length(), Math.ceil(hi) + 1); n++) {
+    const lm = landmarkFor(n);
+    if (lm) scene.push({ y: lm.y, draw: () => drawLandmarkAt(lm) });
+  }
+  scene.sort((a, b) => b.y - a.y); // further up the screen first, so nearer things overlap them
   drawRoad(lo, hi);
   drawRivers(lo, hi, "bridge");
-  for (const { d, n, side } of decos) drawDeco(d, worldOf(Math.max(1, n)), side);
+  for (const item of scene) item.draw();
   for (let w = Math.max(1, worldIndex(Math.max(1, Math.floor(lo)))); w <= worldIndex(Math.max(1, Math.ceil(hi))) + 1; w++)
     if (worldStart(w) <= length()) drawBanner(w);
   for (let n = Math.max(1, Math.floor(lo)); n <= Math.min(length(), Math.ceil(hi)); n++) drawNode(n);

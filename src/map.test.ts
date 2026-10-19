@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LEVELS_PER_WORLD, WORLDS, decorFor, mapLength, nodeStatus, nodeX, opensWorld, pathX, worldIndex, worldOf, worldProgress, worldStart } from "./map";
+import { LANDMARKS, LANDMARK_AT, LEVELS_PER_WORLD, WORLDS, decorFor, landmarkFor, mapLength, nodeStatus, nodeX, opensWorld, pathX, worldIndex, worldOf, worldProgress, worldStart } from "./map";
 
 describe("path", () => {
   it("keeps every node well inside the map", () => {
@@ -74,5 +74,29 @@ describe("opensWorld", () => {
     expect(opensWorld(1)).toBe(false);
     expect(opensWorld(LEVELS_PER_WORLD + 1)).toBe(true);
     expect(opensWorld(LEVELS_PER_WORLD + 2)).toBe(false);
+  });
+});
+
+describe("landmarks", () => {
+  it("puts exactly two in every world, at fixed levels", () => {
+    for (let w = 0; w < WORLDS.length; w++) {
+      const found = Array.from({ length: LEVELS_PER_WORLD }, (_, i) => landmarkFor(worldStart(w) + i)).filter((l) => l !== null);
+      expect(found).toHaveLength(2);
+      expect(found.map((l) => l!.kind)).toEqual([...LANDMARKS[w]!]);
+      expect(landmarkFor(worldStart(w) + LANDMARK_AT[0])).not.toBeNull();
+    }
+  });
+  it("stands well clear of the road, inside the map", () => {
+    for (let n = 1; n <= 150; n++) {
+      const l = landmarkFor(n);
+      if (!l) continue;
+      expect(Math.abs(l.x - pathX(l.y))).toBeGreaterThanOrEqual(0.25);
+      expect(l.x).toBeGreaterThan(0.05);
+      expect(l.x).toBeLessThan(0.95);
+    }
+  });
+  it("is the same every time, and the worlds repeat their buildings", () => {
+    expect(landmarkFor(worldStart(0) + 4)).toEqual(landmarkFor(worldStart(0) + 4));
+    expect(landmarkFor(worldStart(10) + 4)!.kind).toBe(landmarkFor(worldStart(0) + 4)!.kind);
   });
 });

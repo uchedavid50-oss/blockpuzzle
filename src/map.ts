@@ -102,3 +102,33 @@ export function worldProgress(w: number, j: { next: number; stars: Record<number
 
 /** True when reaching level n means stepping into a new world. */
 export const opensWorld = (n: number): boolean => n > 1 && (n - 1) % LEVELS_PER_WORLD === 0;
+
+// ---- Landmarks: big cartoon buildings beside the road, two per world ---------------------------
+
+export type LandmarkKind =
+  | "cottage" | "beachHut" | "cabin" | "cloudHome" | "windmill" | "lighthouse" | "pyramid" | "tent" | "igloo"
+  | "mushroom" | "witchTower" | "emberTower" | "crystalTower" | "volcano" | "castle" | "iceCastle" | "observatory" | "rocket";
+
+/** The two landmarks of each world, in world order (they repeat with the worlds). */
+export const LANDMARKS: readonly (readonly [LandmarkKind, LandmarkKind])[] = [
+  ["cottage", "windmill"], ["lighthouse", "beachHut"], ["pyramid", "tent"], ["igloo", "cabin"], ["mushroom", "witchTower"],
+  ["volcano", "emberTower"], ["crystalTower", "observatory"], ["castle", "cloudHome"], ["observatory", "rocket"], ["iceCastle", "cabin"],
+];
+
+export interface Landmark { x: number; y: number; kind: LandmarkKind; scale: number; flip: boolean; phase: number }
+
+/** Where in a world its two landmarks stand, as offsets from the world's first level. */
+export const LANDMARK_AT = [4, 10] as const;
+
+/**
+ * The landmark standing in the band above level n, if any: one at level 5 and one at level 11 of each
+ * world, set well away from the road on whichever side has more room.
+ */
+export function landmarkFor(n: number): Landmark | null {
+  const w = worldIndex(n);
+  const slot = LANDMARK_AT.findIndex((o) => worldStart(w) + o === n);
+  if (slot < 0) return null;
+  const y = n + 0.45;
+  const x = pathX(y) < 0.5 ? 0.83 : 0.17;
+  return { x, y, kind: LANDMARKS[w % LANDMARKS.length]![slot]!, scale: 1, flip: x > 0.5, phase: seeded(`landmark:${n}`)() * Math.PI * 2 };
+}
