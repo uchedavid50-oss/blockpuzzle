@@ -10,11 +10,13 @@ import { blankRun, recordMove, weeklyDone, weeklyFailed, weeklyFor, weeklySeed, 
 import { haptic, haptics } from "./haptics";
 import { isMuted, sfx, soundState, toggleMute, unlock } from "./sound";
 
-import { canvas, ctx, W, H, dpr, cell, boardX, boardY, trayY, trayCell, COLORS, FONT, reduceMotion, layoutView, setReduceMotion, block, emptyCell, drawShape, drawCentered, easeOutBack, label, pill } from "./gfx";
+import { canvas, ctx, W, H, dpr, cell, boardX, boardY, trayY, trayCell, COLORS, FONT, ROUND, reduceMotion, layoutView, setReduceMotion, block, emptyCell, drawShape, drawCentered, easeOutBack, label, pill, mix, candyBackdrop, bubbleText, candyButton, dim, ribbon, sheet } from "./gfx";
+import { worldOf } from "./map";
 import { BADGES, PALETTE, THEMES, badgesSeen, bumpStreak, checkBadges, cycleTheme, has, markBadgesSeen, markThemeShown, perkUndos, playedDailyToday, saveStats, stats, streakNow, themeIdx, themeShownAt, today, toasts, unlocked } from "./progress";
 import { clearOfficial, markWeeklyCompleted, officialResult, parFor, readJourney, saveOfficial, weeklyCompleted, writeJourney } from "./records";
 import { CARD_H, HINT_KEY, MODES_H, PRAISE, TABS, archiveDates, badgeCell, chHit, drawChallengeIntro, drawHint, drawModes, drawPraise, drawSettings, drawStats, drawToast, modesLayout, settingsLayout, settingsTap, statsLayout, tabRect, ui, type Praise } from "./overlays";
 import { settings } from "./settings";
+import { drawMap, mapCancel, mapCovers, mapDown, mapMove, mapUi, mapUp, mapWheel, openMap, setMapHandlers } from "./mapView";
 
 interface State {
   grid: Grid;
@@ -253,11 +255,24 @@ function undo(): void {
   save();
 }
 
-/** Starts a game, asking first if it would throw away one in progress. */
-function startGame(o: GameOpts): void {
-  if (state.score > 0 && !state.over && state.kind !== "zen" && !confirm("Start a new game? Your current game will be lost.")) return;
+/** Starts a game, asking first if it would throw away one in progress. Returns whether it started. */
+function startGame(o: GameOpts): boolean {
+  if (state.score > 0 && !state.over && state.kind !== "zen" && !confirm("Start a new game? Your current game will be lost.")) return false;
   reset(o);
+  return true;
 }
+
+/** The journey level being played and not yet finished, which the map offers to resume. */
+const resumableLevel = (): number | null => (state.kind === "journey" && !state.over && state.moves > 0 ? state.level : null);
+
+const openStats = (): void => { ui.statsOn = true; ui.statsT = 0; ui.badgeSel = -1; markBadgesSeen(); };
+const openModes = (): void => { ui.modesOn = true; ui.modesView = "main"; ui.modesT = 0; };
+
+setMapHandlers({
+  play: (n) => (resumableLevel() === n ? true : startGame({ kind: "journey", level: n })),
+  modes: openModes,
+  resumable: resumableLevel,
+});
 
 let moves = 0; // placements this session, to time the install nudge
 let overPress: "share" | "again" | "mode" | "undo" | null = null;
@@ -417,7 +432,7 @@ function pickMode(i: number): void {
   if (i === 0) startGame({});
   else if (i === 1) startGame({ daily: today() });
   else if (i === 2) startGame({ kind: "weekly" });
-  else if (i === 3) startGame({ kind: "journey", level: readJourney().next });
+  else if (i === 3) openMap();
   else startGame({ kind: "zen" });
 }
 
@@ -447,6 +462,7 @@ function slotAt(x: number, y: number): number {
 canvas.addEventListener("pointerdown", (e) => {
   unlock(); // must happen on the gesture itself, not on pointerup
   idleT = 0;
+  if (mapUi.on) { mapDown(e); return; }
   const [mx, my] = muteCenter();
   if (Math.hypot(e.clientX - mx, e.clientY - my) <= MUTE_R + 6) { toggleMute(); return; }
   if (ui.hintOn) { ui.hintPress = true; return; }
@@ -460,13 +476,17 @@ canvas.addEventListener("pointerdown", (e) => {
     return;
   }
   if (state.combo < 2 && Math.hypot(e.clientX - W / 2, e.clientY - 30) <= 20) {
-    ui.statsOn = true; ui.statsT = 0; ui.badgeSel = -1; markBadgesSeen();
+    openStats();
     haptics.tick();
     return;
   }
   const [tx, ty] = THEME_C();
   if (Math.hypot(e.clientX - tx, e.clientY - ty) <= 19) { cycleTheme(); markThemeShown(clock); haptics.tick(); return; }
-  if (inRect(CHIP, e.clientX, e.clientY)) { ui.modesOn = true; ui.modesView = "main"; ui.modesT = 0; haptics.tick(); return; }
+  if (inRect(CHIP, e.clientX, e.clientY)) {
+    haptics.tick();
+    if (state.kind === "journey") openMap(); else openModes();
+    return;
+  }
   if (canUndo() && inRect(undoRect(), e.clientX, e.clientY)) { undo(); return; }
   if (drag) return;
   const slot = slotAt(e.clientX, e.clientY);
@@ -480,6 +500,7 @@ canvas.addEventListener("pointerdown", (e) => {
 
 canvas.addEventListener("pointermove", (e) => {
   idleT = 0;
+  if (mapUi.on) { mapMove(e); return; }
   if (drag && e.pointerId === drag.pointerId) {
     drag.vx = drag.vx * 0.6 + (e.clientX - drag.px) * 0.4; // sway the held piece with your hand
     drag.px = e.clientX; drag.py = e.clientY;
@@ -487,6 +508,7 @@ canvas.addEventListener("pointermove", (e) => {
 });
 
 canvas.addEventListener("pointerup", (e) => {
+  if (mapUi.on) { mapUp(e); return; }
   if (ui.settingsPress) {
     const down = ui.settingsPress;
     ui.settingsPress = null;
@@ -577,8 +599,10 @@ canvas.addEventListener("pointerup", (e) => {
     if (overHit(e.clientX, e.clientY) !== want) return;
     if (want === "share") void shareScore();
     else if (want === "undo") undo();
+    else if (want === "mode" && state.kind === "journey") openMap();
     else if (want === "mode") reset(state.kind !== "classic" ? {} : state.daily ? {} : { daily: today() });
-    else if (state.kind === "journey") reset({ kind: "journey", level: (state.level ?? 1) + (state.won ? 1 : 0) });
+    else if (state.kind === "journey" && state.won && state.level) openMap({ level: state.level, stars: state.stars });
+    else if (state.kind === "journey") reset({ kind: "journey", level: state.level ?? 1 });
     else if (state.kind !== "classic") reset({ kind: state.kind });
     else reset({ daily: state.daily, ch: state.challenge !== null ? { seed: state.seed, target: state.challenge } : null }); // a lost challenge replays the same pieces
     return;
@@ -745,7 +769,8 @@ canvas.addEventListener("pointerup", (e) => {
   drag = null;
 });
 
-canvas.addEventListener("pointercancel", () => { drag = null; });
+canvas.addEventListener("pointercancel", () => { drag = null; mapCancel(); });
+canvas.addEventListener("wheel", (e) => { if (mapUi.on) { e.preventDefault(); mapWheel(e.deltaY); } }, { passive: false });
 window.addEventListener("blur", save);
 document.addEventListener("visibilitychange", () => { if (document.hidden) save(); });
 
@@ -800,20 +825,19 @@ function drawHud(): void {
     leftLabel = state.practice ? (state.daily === today() ? "PRACTICE" : "ARCHIVE") : "DAILY";
     rightLabel = state.practice ? "BEST" : "BEST TODAY";
   }
-  label(leftLabel, 22, 20, "left");
-  label(rightLabel, W - 22, 20, "right");
-  ctx.fillStyle = COLORS.text;
-  ctx.font = `700 28px ${FONT}`;
-  ctx.textAlign = "left";
+  label(leftLabel, 22, 14, "left");
+  label(rightLabel, W - 22, 14, "right");
+  // Numbers in chunky outlined lettering; the score bumps as it counts up.
+  ctx.font = `900 28px ${ROUND}`;
+  const lw = ctx.measureText(leftValue).width;
+  const rw = ctx.measureText(rightValue).width;
   ctx.save();
-  ctx.translate(22, 43);
+  ctx.translate(22 + lw / 2, 42);
   const bump = reduceMotion ? 1 : 1 + 0.2 * scorePulse * scorePulse;
   ctx.scale(bump, bump);
-  ctx.fillText(leftValue, 0, 0);
+  bubbleText(leftValue, 0, 0, 28, ["#c7a4ff", "#7a3dff"]);
   ctx.restore();
-  ctx.textAlign = "right";
-  ctx.fillStyle = hot ? COLORS.combo : COLORS.text;
-  ctx.fillText(rightValue, W - 22, 43);
+  bubbleText(rightValue, W - 22 - rw / 2, 42, 28, hot ? ["#fff3a0", "#ffa800"] : ["#ffffff", "#f0e6ff"], { rim: hot ? "#8a4a00" : "#3b1291" });
 
   if (state.combo < 2) {
     ctx.fillStyle = COLORS.dim;
@@ -835,45 +859,37 @@ function drawHud(): void {
     ctx.save();
     ctx.translate(W / 2, 34);
     ctx.scale(pulse, pulse);
-    ctx.font = `800 14px ${FONT}`;
-    const tw = ctx.measureText(label).width + 28;
-    ctx.fillStyle = "rgba(255,197,85,0.14)";
-    ctx.beginPath();
-    ctx.roundRect(-tw / 2, -15, tw, 30, 15);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255,197,85,0.55)";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    ctx.fillStyle = COLORS.combo;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(label, 0, 1);
+    ctx.font = `900 13px ${ROUND}`;
+    const tw = ctx.measureText(label).width + 30;
+    pill({ x: -tw / 2, y: -14, w: tw, h: 28 }, label, true);
     ctx.restore();
   }
 }
 
 function drawControls(): void {
   const played = playedDailyToday();
-  pill(CHIP, "Modes", !played && state.kind === "classic" && !state.daily);
+  pill(CHIP, state.kind === "journey" ? "\u{1F5FA} Map" : "Modes", !played && state.kind === "classic" && !state.daily);
   const streak = streakNow();
   if (streak > 0) {
     ctx.fillStyle = COLORS.combo;
-    ctx.font = `700 14px ${FONT}`;
+    ctx.font = `900 15px ${ROUND}`;
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.fillText(`\u{1F525} ${streak}`, CHIP.x + CHIP.w + 10, CHIP.y + CHIP.h / 2 + 1);
+    ctx.lineJoin = "round"; ctx.lineWidth = 4; ctx.strokeStyle = "#ffffff";
+    ctx.strokeText(`\u{1F525} ${streak}`, CHIP.x + CHIP.w + 12, CHIP.y + CHIP.h / 2 + 1);
+    ctx.fillText(`\u{1F525} ${streak}`, CHIP.x + CHIP.w + 12, CHIP.y + CHIP.h / 2 + 1);
   }
   if (canUndo()) pill(undoRect(), `\u21B6 Undo${state.undoLeft > 1 ? ` ${state.undoLeft}` : ""}`, false);
 
   // Theme button: a round chip showing four of the current colours.
   const [tx, ty] = THEME_C();
-  ctx.fillStyle = "rgba(255,255,255,0.06)";
+  ctx.save();
+  ctx.shadowColor = "rgba(60,10,90,0.25)"; ctx.shadowBlur = 6; ctx.shadowOffsetY = 2;
+  ctx.fillStyle = "#ffffff";
   ctx.beginPath();
-  ctx.arc(tx, ty, 13, 0, Math.PI * 2);
+  ctx.arc(tx, ty, 14, 0, Math.PI * 2);
   ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.14)";
-  ctx.lineWidth = 1;
-  ctx.stroke();
+  ctx.restore();
   for (let i = 0; i < 4; i++) {
     ctx.fillStyle = PALETTE[i]!;
     ctx.beginPath();
@@ -892,31 +908,42 @@ function drawControls(): void {
 
 function drawBoard(): void {
   const bw = cell * SIZE;
-  // Slab edge: a darker panel just below, so the board has thickness.
-  ctx.fillStyle = "#0b0d14";
-  ctx.beginPath();
-  ctx.roundRect(boardX - 10, boardY - 10 + 9, bw + 20, bw + 20, 20);
-  ctx.fill();
+  // A candy frame: white rim, a glossy violet band with a thick lower edge, and a deep well inside.
   ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.55)";
-  ctx.shadowBlur = 36;
+  ctx.shadowColor = "rgba(60,10,90,0.35)";
+  ctx.shadowBlur = 30;
   ctx.shadowOffsetY = 12;
-  const panel = ctx.createLinearGradient(0, boardY, 0, boardY + bw);
-  panel.addColorStop(0, "#1b2030");
-  panel.addColorStop(1, "#11141d");
-  ctx.fillStyle = panel;
+  ctx.fillStyle = "#ffffff";
   ctx.beginPath();
-  ctx.roundRect(boardX - 10, boardY - 10, bw + 20, bw + 20, 20);
+  ctx.roundRect(boardX - 16, boardY - 16, bw + 32, bw + 36, 28);
   ctx.fill();
   ctx.restore();
-  ctx.strokeStyle = "rgba(255,255,255,0.07)";
-  ctx.lineWidth = 1;
+  ctx.fillStyle = "#4b14b0";
   ctx.beginPath();
-  ctx.roundRect(boardX - 10.5, boardY - 10.5, bw + 21, bw + 21, 20);
-  ctx.stroke();
+  ctx.roundRect(boardX - 12, boardY - 12, bw + 24, bw + 28, 24);
+  ctx.fill();
+  const frame = ctx.createLinearGradient(0, boardY - 12, 0, boardY + bw + 12);
+  frame.addColorStop(0, "#c7a4ff");
+  frame.addColorStop(0.5, "#9a62ff");
+  frame.addColorStop(1, "#7a3dff");
+  ctx.fillStyle = frame;
+  ctx.beginPath();
+  ctx.roundRect(boardX - 12, boardY - 12, bw + 24, bw + 22, 24);
+  ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.3)";
+  ctx.beginPath();
+  ctx.roundRect(boardX + 10, boardY - 10, bw - 20, 4, 2);
+  ctx.fill();
+  const well = ctx.createLinearGradient(0, boardY - 4, 0, boardY + bw + 4);
+  well.addColorStop(0, "#2a0d66");
+  well.addColorStop(1, "#3d1a8c");
+  ctx.fillStyle = well;
+  ctx.beginPath();
+  ctx.roundRect(boardX - 4, boardY - 4, bw + 8, bw + 8, 16);
+  ctx.fill();
 
   // Each 2x4 region is outlined: filling one clears it, just like a row or column.
-  ctx.strokeStyle = "rgba(255,255,255,0.11)";
+  ctx.strokeStyle = "rgba(255,255,255,0.22)";
   ctx.lineWidth = 1.5;
   for (let i = 0; i < REGION_COUNT; i++) {
     const [r0, c0] = regionCells(i)[0]!;
@@ -962,6 +989,18 @@ function burst(x: number, y: number, color: string, lines: number): void {
   }
 }
 
+/** Each mode gets its own sky behind the board; a journey level takes its world's colours. */
+function backdropColors(): [string, string] {
+  if (state.kind === "journey" && state.level) {
+    const w = worldOf(state.level);
+    return [mix(w.ground[1], 255, 0.62), mix(w.ground[0], 255, 0.42)];
+  }
+  if (state.kind === "zen") return ["#d8f7e6", "#cfe4ff"];
+  if (state.kind === "weekly") return ["#d4f1ff", "#dccbff"];
+  if (state.daily) return ["#fff0c9", "#ffcde4"];
+  return ["#ffd9ef", "#d9c8ff"];
+}
+
 let dtLast = 0;
 function render(dt: number): void {
   dtLast = dt;
@@ -1003,11 +1042,9 @@ function render(dt: number): void {
   if (state.over) overT = Math.min(1, overT + dt * 2.2);
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const bg = ctx.createRadialGradient(W / 2, H * 0.35, 20, W / 2, H * 0.35, Math.max(W, H) * 0.85);
-  bg.addColorStop(0, "#1c2234");
-  bg.addColorStop(1, "#0a0c12");
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
+  if (mapCovers()) { drawScreens(dt); return; } // the game is hidden under the map: skip drawing it
+  const [skyTop, skyBottom] = backdropColors();
+  candyBackdrop(clock, skyTop, skyBottom);
 
   if (shake > 0 && !reduceMotion) {
     const a = shake * shake * 6;
@@ -1079,10 +1116,14 @@ function render(dt: number): void {
   // Tray
   state.tray.forEach((shape, i) => {
     const slot = slotRect(i);
-    ctx.fillStyle = "rgba(255,255,255,0.03)";
+    // Each tray slot is a frosted bubble.
+    ctx.fillStyle = "rgba(255,255,255,0.45)";
     ctx.beginPath();
-    ctx.roundRect(slot.x, slot.y, slot.size, slot.size, 18);
+    ctx.roundRect(slot.x, slot.y, slot.size, slot.size, 22);
     ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
     if (!shape || drag?.slot === i || returning.some((r) => r.slot === i)) return;
     const fits = canPlaceAnywhere(state.grid, shape);
     ctx.globalAlpha = fits ? 1 : 0.28;
@@ -1169,18 +1210,8 @@ function render(dt: number): void {
     ctx.globalAlpha = Math.max(0, a);
     ctx.translate(f.x, f.y - rise * cell * 1.4);
     ctx.scale(pop0, pop0);
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.shadowColor = "rgba(0,0,0,0.6)";
-    ctx.shadowBlur = 10;
-    ctx.fillStyle = "#fff";
-    ctx.font = `800 ${Math.round(cell * 0.62)}px ${FONT}`;
-    ctx.fillText(f.text, 0, 0);
-    if (f.sub) {
-      ctx.fillStyle = COLORS.combo;
-      ctx.font = `800 ${Math.round(cell * 0.4)}px ${FONT}`;
-      ctx.fillText(f.sub, 0, -cell * 0.6);
-    }
+    bubbleText(f.text, 0, 0, Math.round(cell * 0.62), ["#fff3a0", "#ffb300"], { rim: "#7a3200" });
+    if (f.sub) bubbleText(f.sub, 0, -cell * 0.6, Math.round(cell * 0.4), ["#ffffff", "#ffe6f6"]);
     ctx.restore();
   }
 
@@ -1194,25 +1225,19 @@ function render(dt: number): void {
   if (state.over) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const e = 1 - Math.pow(1 - overT, 3);
-    ctx.fillStyle = `rgba(7,9,14,${0.82 * e})`;
-    ctx.fillRect(0, 0, W, H);
+    dim(e);
     ctx.save();
     ctx.globalAlpha = e;
+    // The card pops in with a little overshoot.
+    const pop = reduceMotion ? 1 : 0.85 + 0.15 * easeOutBack(e);
     ctx.translate(W / 2, H / 2 + (1 - e) * 24);
+    ctx.scale(pop, pop);
     const cw = Math.min(W - 48, 320);
     const extra = canUndoOver() ? 52 : 0;
-    const card = ctx.createLinearGradient(0, -145, 0, 225 + extra);
-    card.addColorStop(0, "#222840");
-    card.addColorStop(1, "#151a2a");
-    ctx.shadowColor = "rgba(0,0,0,0.6)";
-    ctx.shadowBlur = 40;
-    ctx.fillStyle = card;
-    ctx.beginPath();
-    ctx.roundRect(-cw / 2, -145, cw, 370 + extra, 26);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = "rgba(255,255,255,0.09)";
-    ctx.stroke();
+    ctx.save();
+    ctx.translate(0, 40 + extra / 2);
+    sheet(cw, 370 + extra, "");
+    ctx.restore();
 
     const ch = state.challenge;
     const won = ch !== null && state.score > ch;
@@ -1240,61 +1265,50 @@ function render(dt: number): void {
         : state.daily && par ? (state.score >= par ? `Par ${par} \u00B7 beat it by ${state.score - par}` : `Par ${par} \u00B7 ${par - state.score} below`)
         : `Best ${state.best}`;
     }
+    ribbon(head, -145, cw, gold ? "gold" : "violet");
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
+    bubbleText(big, 0, -50, lvl ? 50 : 60, gold ? ["#fff3a0", "#ffa800"] : ["#c7a4ff", "#7a3dff"], { rim: gold ? "#7a3200" : "#3b1291", maxW: cw - 40 });
     ctx.fillStyle = COLORS.dim;
-    ctx.font = `700 12px ${FONT}`;
-    ctx.fillText(head, 0, -92);
-    ctx.fillStyle = gold ? COLORS.combo : COLORS.text;
-    ctx.font = `800 ${lvl ? 50 : 58}px ${FONT}`;
-    ctx.fillText(big, 0, -42);
-    ctx.fillStyle = COLORS.dim;
-    ctx.font = `600 14px ${FONT}`;
-    ctx.fillText(sub, 0, 8, cw - 32);
+    ctx.font = `800 14px ${ROUND}`;
+    ctx.fillText(sub, 0, 6, cw - 32);
 
-    const bgrad = ctx.createLinearGradient(0, 40, 0, 94);
-    bgrad.addColorStop(0, "#6cb4ff");
-    bgrad.addColorStop(1, "#3a82e6");
-    ctx.fillStyle = bgrad;
-    ctx.beginPath();
-    ctx.roundRect(-96, 40, 192, 54, 27);
-    ctx.fill();
-    ctx.fillStyle = "#fff";
-    ctx.font = `700 18px ${FONT}`;
-    ctx.fillText(lvl ? (state.won ? "Next level" : "Retry level") : "Play again", 0, 68);
-
-    ctx.strokeStyle = "rgba(255,255,255,0.22)";
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.roundRect(-96, 108, 192, 46, 23);
-    ctx.stroke();
-    ctx.fillStyle = clock - sharedAt < 1.8 ? "#7fe3a8" : COLORS.text;
-    ctx.font = `600 16px ${FONT}`;
-    ctx.fillText(clock - sharedAt < 1.8 ? "Copied to clipboard" : "Share score", 0, 131);
+    const held = (k: typeof overPress): number => (overPress === k ? 1 : 0);
+    candyButton(0, 66, 200, 54, lvl ? (state.won ? "Continue" : "Retry level") : "Play again", state.won || gold ? "green" : "pink", held("again"), 21);
+    const copied = clock - sharedAt < 1.8;
+    candyButton(0, 131, 184, 42, copied ? "Copied!" : "Share score", copied ? "green" : "blue", held("share"), 16);
 
     ctx.fillStyle = COLORS.dim;
-    ctx.font = `600 15px ${FONT}`;
-    ctx.fillText(state.kind !== "classic" ? "Back to classic" : state.daily ? "Play a random game" : "Play today\u2019s daily", 0, 186);
+    ctx.font = `800 15px ${ROUND}`;
+    ctx.fillText(state.kind === "journey" ? "Journey map" : state.kind !== "classic" ? "Back to classic" : state.daily ? "Play a random game" : "Play today\u2019s daily", 0, 186);
     if (state.daily === today()) {
       // Plant the return trip while the player is still pleased with the result.
       const left = timeUntilMidnight(new Date());
-      ctx.font = `500 12px ${FONT}`;
+      ctx.font = `700 12px ${ROUND}`;
       ctx.fillText(`Next daily in ${left.h}h ${String(left.m).padStart(2, "0")}m`, 0, 210);
     }
     if (extra) {
       ctx.fillStyle = COLORS.combo;
-      ctx.font = `700 15px ${FONT}`;
+      ctx.font = `900 15px ${ROUND}`;
       ctx.fillText("\u21B6 Undo last move", 0, 238);
     }
     ctx.restore();
   }
 
+  drawScreens(dt);
+}
+
+/** Everything drawn over the game: the map, then the sheets and toasts above it. */
+function drawScreens(dt: number): void {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (mapUi.on) drawMap(dt);
+  const screen = mapUi.on;
   for (const t of toasts.slice(0, 1)) drawToast(t);
   if (ui.chIntro && !ui.hintOn) drawChallengeIntro(dtLast, state.score > 0 && !state.over);
   if (ui.statsOn) drawStats();
   if (ui.modesOn) drawModes(dtLast);
   if (ui.settingsOn) drawSettings(dtLast);
-  if (ui.hintOn) drawHint(dtLast);
+  if (ui.hintOn && !screen) drawHint(dtLast);
 }
 
 let last = performance.now();
@@ -1346,8 +1360,8 @@ function maybeShowInstall(): void {
   bar.style.cssText =
     "position:fixed;left:12px;right:12px;bottom:max(12px,env(safe-area-inset-bottom));z-index:10;" +
     "display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:16px;" +
-    "background:rgba(28,33,50,0.96);border:1px solid rgba(255,255,255,0.12);color:#eef1f8;" +
-    "font:500 14px system-ui,-apple-system,sans-serif;box-shadow:0 12px 40px rgba(0,0,0,0.5)";
+    "background:linear-gradient(#fff7fc,#f1e6ff);border:3px solid #fff;color:#3d1a5c;" +
+    "font:700 14px 'Arial Rounded MT Bold',system-ui,-apple-system,sans-serif;box-shadow:0 12px 34px rgba(60,10,90,0.35)";
   const msg = document.createElement("span");
   msg.style.flex = "1";
   msg.textContent = installEvent
@@ -1363,8 +1377,8 @@ function maybeShowInstall(): void {
     const b = document.createElement("button");
     b.textContent = text;
     b.style.cssText =
-      "border:0;border-radius:999px;padding:8px 14px;font:600 13px system-ui,sans-serif;cursor:pointer;" +
-      (primary ? "background:#4da3ff;color:#fff" : "background:transparent;color:#9aa3b8");
+      "border:2px solid #fff;border-radius:999px;padding:8px 14px;font:800 13px 'Arial Rounded MT Bold',system-ui,sans-serif;cursor:pointer;" +
+      (primary ? "background:linear-gradient(#c7a4ff,#8a4dff);color:#fff;box-shadow:0 3px 0 #4b14b0" : "background:transparent;color:#8d6aa8;border-color:transparent");
     b.onclick = on;
     return b;
   };

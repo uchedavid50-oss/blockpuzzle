@@ -19,9 +19,11 @@ no rotation, no timer. Never reference Tetris in code, assets or naming.
 - Every random game is seeded, so a shared link replays the exact same pieces.
 
 ## Structure
-- Pure, tested modules (no DOM): board, rng, streak, share, meta, challenge, journey, weekly, solver.
-- main.ts holds the game loop, board rendering and input. gfx.ts has drawing primitives and layout,
-  overlays.ts the screens drawn over the game, progress.ts stats/badges/themes/streak, records.ts saved
+- Pure, tested modules (no DOM): board, rng, streak, share, meta, challenge, journey, weekly, solver, map.
+- main.ts holds the game loop, board rendering and input. gfx.ts has drawing primitives and layout
+  (including the shared candy look: sheets, ribbons, candy buttons, bubbly lettering),
+  overlays.ts the screens drawn over the game, mapView.ts the journey map (its path, worlds and
+  scenery layout are in map.ts), progress.ts stats/badges/themes/streak, records.ts saved
   records. Keep new logic in a pure module where it can be tested.
 - public/par.json is each day's par, played offline by a greedy bot (src/solver.ts).
   Regenerate it with `npm run par` whenever the rules or the piece set change, because par depends on both.
