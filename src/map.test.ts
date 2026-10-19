@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LEVELS_PER_WORLD, WORLDS, decorFor, mapLength, nodeStatus, nodeX, pathX, worldIndex, worldOf, worldStart } from "./map";
+import { LEVELS_PER_WORLD, WORLDS, decorFor, mapLength, nodeStatus, nodeX, opensWorld, pathX, worldIndex, worldOf, worldProgress, worldStart } from "./map";
 
 describe("path", () => {
   it("keeps every node well inside the map", () => {
@@ -50,5 +50,29 @@ describe("decorFor", () => {
         expect(d.x).toBeLessThan(1);
         expect(worldOf(n).decos).toContain(d.kind);
       }
+  });
+});
+
+describe("worldProgress", () => {
+  const j = { next: 18, stars: { 1: 3, 2: 2, 3: 3, 16: 1, 17: 3 } as Record<number, number> };
+  it("counts levels cleared and stars in a world", () => {
+    const w = worldProgress(1, j);
+    expect(w.cleared).toBe(2);
+    expect(w.stars).toBe(4);
+    expect(w.maxStars).toBe(LEVELS_PER_WORLD * 3);
+    expect(w.locked).toBe(false);
+  });
+  it("points at the first level short of three stars, never past the current one", () => {
+    expect(worldProgress(0, j).first).toBe(2);
+    expect(worldProgress(1, j).first).toBe(16);
+  });
+  it("knows a world that is still locked", () => expect(worldProgress(2, j).locked).toBe(true));
+});
+
+describe("opensWorld", () => {
+  it("is true only for the first level of worlds after the first", () => {
+    expect(opensWorld(1)).toBe(false);
+    expect(opensWorld(LEVELS_PER_WORLD + 1)).toBe(true);
+    expect(opensWorld(LEVELS_PER_WORLD + 2)).toBe(false);
   });
 });

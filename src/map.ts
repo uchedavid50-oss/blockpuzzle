@@ -79,3 +79,26 @@ export function decorFor(n: number): Decoration[] {
   }
   return out;
 }
+
+export interface WorldProgress { cleared: number; stars: number; maxStars: number; first: number; locked: boolean }
+
+/**
+ * How far the player is through world w: levels cleared, stars earned out of the most possible,
+ * and the first level still worth playing (the first one without three stars).
+ */
+export function worldProgress(w: number, j: { next: number; stars: Record<number, number> }): WorldProgress {
+  const start = worldStart(w);
+  let cleared = 0;
+  let stars = 0;
+  let first = -1;
+  for (let n = start; n < start + LEVELS_PER_WORLD; n++) {
+    const s = j.stars[n] ?? 0;
+    if (s > 0 || n < j.next) cleared++;
+    stars += s;
+    if (first < 0 && s < 3 && n <= j.next) first = n;
+  }
+  return { cleared, stars, maxStars: LEVELS_PER_WORLD * 3, first: first < 0 ? start : first, locked: start > j.next };
+}
+
+/** True when reaching level n means stepping into a new world. */
+export const opensWorld = (n: number): boolean => n > 1 && (n - 1) % LEVELS_PER_WORLD === 0;
