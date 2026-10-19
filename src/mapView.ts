@@ -591,6 +591,8 @@ function updateAmbient(dt: number): void {
 // ---- Drawing: landscape ----------------------------------------------------------------------
 
 /** A small stable hash in [0, 1) for scenery that does not need a full seeded stream. */
+const INK = "rgba(110,40,130,0.6)"; // the thin cartoon outline on the sweets
+
 const h01 = (a: number, b: number): number => {
   const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
   return s - Math.floor(s);
@@ -647,6 +649,42 @@ function drawGround(lo: number, hi: number): void {
       }
   }
   ctx.globalAlpha = 1;
+
+  // Sugar ribbons winding across the ground, and a scatter of sprinkles.
+  const SPRINKLES = ["#ff5fa8", "#ffd23f", "#4fc3ff", "#8a4dff", "#3fd6a0", "#ff8a3d"];
+  for (let n = Math.floor(lo) - 1; n <= Math.ceil(hi); n++) {
+    if (n < -2) continue;
+    const world = worldOf(Math.max(1, n));
+    const kk0 = ky(n + 0.5);
+    if (kk0 < 0.34) continue;
+    ctx.globalAlpha = world.night ? 0.1 : 0.2;
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineCap = "round";
+    ctx.lineWidth = 16 * kk0;
+    ctx.beginPath();
+    const yb = sy(n + 0.55);
+    for (let x = -10; x <= W + 10; x += 14) {
+      const yy = yb + Math.sin(x * 0.018 + n * 1.7) * 16 * kk0;
+      if (x === -10) ctx.moveTo(x, yy); else ctx.lineTo(x, yy);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = world.night ? 0.55 : 0.7;
+    for (let i = 0; i < 6; i++) {
+      const t = n + h01(i, n + 3);
+      const kk = ky(t);
+      if (kk < 0.34) continue;
+      const x = W / 2 + (h01(n + 11, i) * W - W / 2) * pinchAt(t);
+      const y = sy(t);
+      if (Math.abs(x - nx(t)) < 44 * kk) continue; // never on the road
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(h01(i, n) * Math.PI);
+      ctx.fillStyle = SPRINKLES[(i + n) % SPRINKLES.length]!;
+      ctx.beginPath(); ctx.roundRect(-5 * kk, -1.8 * kk, 10 * kk, 3.6 * kk, 1.8 * kk); ctx.fill();
+      ctx.restore();
+    }
+  }
+  ctx.globalAlpha = 1;
 }
 
 /** The world on the horizon (where the sky takes its colour from). */
@@ -661,8 +699,8 @@ function drawSky(): void {
     g.addColorStop(0, mix(world.ground[0], 0, 0.35));
     g.addColorStop(1, mix(world.accent, 255, 0.15));
   } else {
-    g.addColorStop(0, mix(world.accent, 255, 0.4));
-    g.addColorStop(1, "#fff3c9");
+    g.addColorStop(0, mix(world.accent, 255, 0.45));
+    g.addColorStop(1, mix(world.accent, 255, 0.86));
   }
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, hz + 20);
@@ -954,6 +992,124 @@ function drawDeco(d: Decoration, world: (typeof WORLDS)[number], side = false): 
       ctx.restore();
       break;
     }
+    case "lollipop": {
+      ctx.rotate(sway);
+      const cols = ["#ff5fa8", "#ff9a3d", "#3fd6a0", "#8a4dff", "#4fc3ff"];
+      const c = cols[Math.floor(d.phase * 3) % cols.length]!;
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.8;
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath(); ctx.roundRect(-s * 0.055, -s * 0.85, s * 0.11, s * 0.85, s * 0.05); ctx.fill(); ctx.stroke();
+      const g = ctx.createRadialGradient(-s * 0.15, -s * 1.25, 2, 0, -s * 1.1, s * 0.55);
+      g.addColorStop(0, mix(c, 255, 0.45)); g.addColorStop(1, c);
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(0, -s * 1.1, s * 0.46, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = s * 0.07; ctx.lineCap = "round";
+      ctx.beginPath();
+      for (let a = 0.4; a < 17; a += 0.35) { const r = s * 0.035 * a; ctx.lineTo(Math.cos(a) * r, -s * 1.1 + Math.sin(a) * r); }
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.beginPath(); ctx.ellipse(-s * 0.22, -s * 1.3, s * 0.1, s * 0.06, -0.6, 0, Math.PI * 2); ctx.fill();
+      break;
+    }
+    case "candyCane": {
+      ctx.rotate(sway * 0.6);
+      const path = (): void => { ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -s * 0.95); ctx.arc(-s * 0.26, -s * 0.95, s * 0.26, 0, -Math.PI, true); };
+      ctx.lineCap = "round";
+      path(); ctx.strokeStyle = INK; ctx.lineWidth = s * 0.25; ctx.stroke();
+      path(); ctx.strokeStyle = "#ffffff"; ctx.lineWidth = s * 0.19; ctx.stroke();
+      ctx.lineCap = "butt";
+      ctx.setLineDash([s * 0.12, s * 0.14]);
+      path(); ctx.strokeStyle = "#ff3f6c"; ctx.lineWidth = s * 0.19; ctx.stroke();
+      ctx.setLineDash([]);
+      break;
+    }
+    case "cupcake": {
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.8;
+      const cols = ["#ff9fcf", "#ffd86b", "#8fe6d2", "#c7a4ff"];
+      const c = cols[Math.floor(d.phase * 2) % cols.length]!;
+      ctx.fillStyle = c;
+      ctx.beginPath(); ctx.moveTo(-s * 0.32, -s * 0.42); ctx.lineTo(s * 0.32, -s * 0.42); ctx.lineTo(s * 0.23, 0); ctx.lineTo(-s * 0.23, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = "rgba(90,30,120,0.3)"; ctx.lineWidth = 1.4;
+      for (let i = -2; i <= 2; i++) { ctx.beginPath(); ctx.moveTo(i * s * 0.12, -s * 0.42); ctx.lineTo(i * s * 0.085, 0); ctx.stroke(); }
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.8;
+      for (const [y, rx, col] of [[-s * 0.5, s * 0.36, "#ffe3f2"], [-s * 0.7, s * 0.28, "#ffc2e0"], [-s * 0.88, s * 0.18, "#ffe3f2"]] as const) {
+        ctx.fillStyle = col; ctx.beginPath(); ctx.ellipse(0, y, rx, s * 0.14, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      }
+      ctx.fillStyle = "#ff3f6c";
+      ctx.beginPath(); ctx.arc(0, -s * 1.03, s * 0.09, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      break;
+    }
+    case "donut": {
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.8;
+      const icing = ["#ff7fb8", "#7fd6ff", "#ffd86b", "#c7a4ff"][Math.floor(d.phase * 2) % 4]!;
+      ctx.fillStyle = "#e0a25a";
+      ctx.beginPath(); ctx.ellipse(0, -s * 0.16, s * 0.52, s * 0.3, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = icing;
+      ctx.beginPath(); ctx.ellipse(0, -s * 0.26, s * 0.5, s * 0.29, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = "#6f4aa0";
+      ctx.beginPath(); ctx.ellipse(0, -s * 0.26, s * 0.17, s * 0.1, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      const sp = ["#ffffff", "#ffd23f", "#ff5fa8", "#4fc3ff"];
+      for (let i = 0; i < 9; i++) {
+        const a = (i / 9) * Math.PI * 2 + d.phase;
+        const px = Math.cos(a) * s * 0.34, py = -s * 0.26 + Math.sin(a) * s * 0.19;
+        ctx.save(); ctx.translate(px, py); ctx.rotate(a);
+        ctx.fillStyle = sp[i % 4]!; ctx.beginPath(); ctx.roundRect(-s * 0.05, -s * 0.018, s * 0.1, s * 0.036, 2); ctx.fill();
+        ctx.restore();
+      }
+      break;
+    }
+    case "gumdrop": {
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.8;
+      const c = ["#ff5fa8", "#ffb81f", "#3fd6a0", "#8a4dff", "#4fc3ff"][Math.floor(d.phase * 2) % 5]!;
+      const g = ctx.createLinearGradient(0, -s * 0.8, 0, 0);
+      g.addColorStop(0, mix(c, 255, 0.4)); g.addColorStop(1, mix(c, 0, 0.12));
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.moveTo(-s * 0.38, 0); ctx.bezierCurveTo(-s * 0.4, -s * 0.5, -s * 0.2, -s * 0.8, 0, -s * 0.8); ctx.bezierCurveTo(s * 0.2, -s * 0.8, s * 0.4, -s * 0.5, s * 0.38, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      for (const [dx, dy] of [[-0.15, -0.55], [0.1, -0.62], [0.2, -0.38], [-0.05, -0.3], [-0.24, -0.22], [0.16, -0.14]] as const) { ctx.beginPath(); ctx.arc(dx * s, dy * s, s * 0.025, 0, Math.PI * 2); ctx.fill(); }
+      ctx.fillStyle = "rgba(255,255,255,0.5)";
+      ctx.beginPath(); ctx.ellipse(-s * 0.16, -s * 0.62, s * 0.07, s * 0.13, 0.5, 0, Math.PI * 2); ctx.fill();
+      break;
+    }
+    case "cottonBush": {
+      const bob = reduceMotion ? 0 : Math.sin(clock * 1.1 + d.phase) * 1.5;
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.8;
+      const pinkish = Math.floor(d.phase * 2) % 2 === 0;
+      for (const [dx, dy, r] of [[-0.3, -0.3, 0.3], [0.3, -0.3, 0.3], [0, -0.58, 0.36], [-0.12, -0.28, 0.32], [0.14, -0.26, 0.32]] as const) {
+        const g = ctx.createRadialGradient((dx - 0.1) * s, (dy - 0.1) * s + bob, 1, dx * s, dy * s + bob, r * s);
+        g.addColorStop(0, "#ffffff"); g.addColorStop(1, pinkish ? "#ffb3dc" : "#bfe6ff");
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(dx * s, dy * s + bob, r * s, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      }
+      ctx.strokeStyle = "rgba(255,255,255,0.8)"; ctx.lineWidth = s * 0.05;
+      ctx.beginPath(); for (let a = 0.5; a < 9; a += 0.4) { const r = s * 0.025 * a; ctx.lineTo(Math.cos(a) * r, -s * 0.5 + Math.sin(a) * r + bob); } ctx.stroke();
+      break;
+    }
+    case "iceCream": {
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.8;
+      ctx.fillStyle = "#e8b668";
+      ctx.beginPath(); ctx.moveTo(-s * 0.26, -s * 0.52); ctx.lineTo(s * 0.26, -s * 0.52); ctx.lineTo(0, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = "rgba(120,70,20,0.45)"; ctx.lineWidth = 1.2;
+      for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.moveTo(i * s * 0.1, -s * 0.52); ctx.lineTo(i * s * 0.03, -s * 0.05); ctx.stroke(); }
+      ctx.beginPath(); ctx.moveTo(-s * 0.16, -s * 0.3); ctx.lineTo(s * 0.18, -s * 0.38); ctx.moveTo(-s * 0.08, -s * 0.14); ctx.lineTo(s * 0.1, -s * 0.2); ctx.stroke();
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.8;
+      for (const [y, r, col] of [[-s * 0.7, s * 0.31, "#ffb3dc"], [-s * 1.0, s * 0.26, "#9ae8d4"]] as const) {
+        ctx.fillStyle = col; ctx.beginPath(); ctx.arc(0, y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      }
+      ctx.fillStyle = "#ff3f6c";
+      ctx.beginPath(); ctx.arc(s * 0.04, -s * 1.28, s * 0.08, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      break;
+    }
+    case "cookie": {
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.8;
+      const g = ctx.createRadialGradient(-s * 0.1, -s * 0.5, 2, 0, -s * 0.4, s * 0.45);
+      g.addColorStop(0, "#f3c98a"); g.addColorStop(1, "#c98a4a");
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(0, -s * 0.38, s * 0.38, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = "#5a3322";
+      for (const [dx, dy, r] of [[-0.16, -0.5, 0.07], [0.12, -0.55, 0.06], [0.18, -0.3, 0.07], [-0.08, -0.28, 0.06], [-0.22, -0.3, 0.045], [0.02, -0.42, 0.04]] as const) { ctx.beginPath(); ctx.ellipse(dx * s, dy * s, r * s, r * s * 0.8, 0.4, 0, Math.PI * 2); ctx.fill(); }
+      break;
+    }
     case "puff": {
       const bob = reduceMotion ? 0 : Math.sin(clock * 1.2 + d.phase) * 3;
       ctx.fillStyle = "#ffffff";
@@ -989,28 +1145,34 @@ function drawRoad(lo: number, hi: number): void {
       ctx.beginPath(); ctx.moveTo(p.x, p.y + off * p.k); ctx.lineTo(q.x, q.y + off * q.k); ctx.stroke();
     }
   };
-  pass(34, () => "rgba(0,0,0,0.2)", 6);
-  pass(32, (t) => mix(worldOf(Math.max(1, Math.round(t))).road, 0, 0.28));
-  pass(24, (t) => worldOf(Math.max(1, Math.round(t))).road);
-  // Gem stepping-stones along the middle: lit in the game's colours where you've already been.
-  const reached = tokenT();
-  for (let t = Math.ceil(a * 4) / 4; t <= b; t += 0.25) {
-    if (Math.abs(t - Math.round(t)) < 0.3) continue; // nodes sit on the whole numbers
-    const x = nx(t);
-    const y = dy(t);
-    const kk = ky(t);
-    if (kk < 0.33) continue;
-    if (t < reached) {
-      // They hop in a wave, higher the faster you scroll.
-      const bob = reduceMotion ? 0 : Math.sin(clock * 3 + t * 4) * (1.2 + Math.min(7, Math.abs(speed) * 0.006));
-      gem(x, y + bob * kk, 11 * kk, PALETTE[Math.round(t * 4) % PALETTE.length]!);
-    } else {
-      ctx.fillStyle = "rgba(255,255,255,0.55)";
-      ctx.strokeStyle = "rgba(90,40,140,0.18)";
-      ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.roundRect(x - 4.5 * kk, y - 4.5 * kk, 9 * kk, 9 * kk, 3 * kk); ctx.fill(); ctx.stroke();
-    }
+  pass(42, () => "rgba(120,40,140,0.22)", 7);
+  pass(39, () => "#ffffff");
+  pass(32, (t) => mix(worldOf(Math.max(1, Math.round(t))).accent, 255, 0.84));
+  // Diagonal candy stripes across the ribbon, evenly spaced along it.
+  let carry = 0;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const p = pts[i]!;
+    const q = pts[i + 1]!;
+    const dx = q.x - p.x;
+    const dyy = q.y - p.y;
+    const len = Math.hypot(dx, dyy) || 1;
+    carry += len;
+    const gap = 17 * p.k;
+    if (carry < gap || p.k < 0.34) continue;
+    carry -= gap;
+    const tx = dx / len;
+    const ty = dyy / len;
+    const hw = 15.5 * p.k;
+    ctx.strokeStyle = mix(worldOf(Math.max(1, Math.round(p.t))).accent, 255, 0.05);
+    ctx.lineWidth = 7.5 * p.k;
+    ctx.lineCap = "butt";
+    ctx.beginPath();
+    ctx.moveTo(p.x - ty * hw + tx * hw * 0.6, p.y + tx * hw + ty * hw * 0.6);
+    ctx.lineTo(p.x + ty * hw - tx * hw * 0.6, p.y - tx * hw - ty * hw * 0.6);
+    ctx.stroke();
   }
+  ctx.lineCap = "round";
+  pass(3, () => "rgba(255,255,255,0.55)", -9); // a glossy highlight along the ribbon
 }
 
 function drawBanner(w: number): void {
@@ -1102,27 +1264,31 @@ function drawNode(n: number): void {
     ctx.globalAlpha = 1;
   }
 
-  // Each level is a big glossy gem block in a white frame, like a piece waiting to be placed.
-  const base = st === "locked" ? "#aaa0c4" : world.accent;
-  const rr = r * 0.42;
+  // Each level is a round, glossy candy bubble in a white ring.
+  const earnedNow = j.stars[n] ?? 0;
+  const base = st === "locked" ? "#f4c6e8" : st === "cleared" && earnedNow >= 3 ? "#ffb21f" : world.accent;
   shadow(x, y + r * 0.95, r * 0.95);
   ctx.fillStyle = gate && st !== "locked" ? "#ffd23f" : "#ffffff";
-  ctx.beginPath(); ctx.roundRect(x - r - 3.5, y - r - 3.5, r * 2 + 7, r * 2 + 12, rr + 3); ctx.fill();
-  ctx.fillStyle = mix(base, 0, 0.42); // the block's thickness
-  ctx.beginPath(); ctx.roundRect(x - r, y - r + 5, r * 2, r * 2, rr); ctx.fill();
-  const g = ctx.createLinearGradient(0, y - r, 0, y + r);
-  g.addColorStop(0, mix(base, 255, 0.45));
-  g.addColorStop(0.55, base);
-  g.addColorStop(1, mix(base, 0, 0.12));
+  ctx.beginPath(); ctx.arc(x, y + 2, r + 3.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = mix(base, 0, 0.4); // the bubble's thickness
+  ctx.beginPath(); ctx.arc(x, y + 4.5, r, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = st === "locked" ? 0.92 : 1;
+  const g = ctx.createRadialGradient(x - r * 0.3, y - r * 0.4, r * 0.1, x, y, r * 1.05);
+  g.addColorStop(0, mix(base, 255, 0.55));
+  g.addColorStop(0.5, base);
+  g.addColorStop(1, mix(base, 0, 0.16));
   ctx.fillStyle = g;
-  ctx.beginPath(); ctx.roundRect(x - r, y - r, r * 2, r * 2 - 1, rr); ctx.fill();
-  ctx.fillStyle = "rgba(255,255,255,0.35)";
-  ctx.beginPath(); ctx.roundRect(x - r * 0.72, y - r * 0.84, r * 1.44, r * 0.5, r * 0.25); ctx.fill();
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = "rgba(255,255,255,0.4)"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(x, y, r * 0.8, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,0.6)";
+  ctx.beginPath(); ctx.ellipse(x - r * 0.3, y - r * 0.55, r * 0.42, r * 0.2, -0.5, 0, Math.PI * 2); ctx.fill();
   const glint = glints.get(n);
   if (glint !== undefined) {
-    // A band of light sweeps across the gem.
+    // A band of light sweeps across the bubble.
     ctx.save();
-    ctx.beginPath(); ctx.roundRect(x - r, y - r, r * 2, r * 2 - 1, rr); ctx.clip();
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.clip();
     ctx.translate(x - r * 2 + glint * r * 4, y);
     ctx.rotate(0.5);
     const band = ctx.createLinearGradient(-r * 0.4, 0, r * 0.4, 0);
@@ -1139,9 +1305,9 @@ function drawNode(n: number): void {
   ctx.font = `900 ${n >= 100 ? 16 : 19}px ${ROUND}`;
   ctx.lineJoin = "round";
   ctx.lineWidth = 4;
-  ctx.strokeStyle = mix(base, 0, 0.5);
+  ctx.strokeStyle = st === "locked" ? "rgba(190,110,170,0.85)" : mix(base, 0, 0.5);
   ctx.strokeText(String(n), x, y + 1);
-  ctx.fillStyle = st === "locked" ? "#f1ecf8" : "#ffffff";
+  ctx.fillStyle = st === "locked" ? "#ffffff" : "#ffffff";
   ctx.fillText(String(n), x, y + 1);
 
   if (gate) {
@@ -1161,7 +1327,7 @@ function drawNode(n: number): void {
       if (walk && n === walk.from) k = Math.max(0, Math.min(1, (walk.t - 0.2 - i * 0.2) / 0.35));
       const on = i < earned;
       const sxp = x + (i - 1) * 17;
-      const syp = gate ? y + r + 13 - (i === 1 ? -3 : 0) : y - r - 9 - (i === 1 ? 4 : 0);
+      const syp = y + r + 14 + (i === 1 ? 4 : 0);
       const sc = on && walk && n === walk.from && i < walk.stars ? easeOutBack(k) : 1;
       if (sc <= 0.01) continue;
       star(sxp, syp, 8 * sc);

@@ -78,26 +78,33 @@ function cottage(clock: number, roof: string, roofHi: string, wall: string, snow
 }
 
 function windmill(clock: number): void {
-  shape(() => { ctx.moveTo(-20, 0); ctx.lineTo(20, 0); ctx.lineTo(12, -60); ctx.lineTo(-12, -60); ctx.closePath(); }, vg(-60, 0, "#fff3d6", "#e8c98e"));
+  shape(() => { ctx.moveTo(-20, 0); ctx.lineTo(20, 0); ctx.lineTo(12, -60); ctx.lineTo(-12, -60); ctx.closePath(); }, vg(-60, 0, "#ffffff", "#ffd9ec"));
   ctx.save();
   ctx.beginPath(); ctx.moveTo(-20, 0); ctx.lineTo(20, 0); ctx.lineTo(12, -60); ctx.lineTo(-12, -60); ctx.closePath(); ctx.clip();
-  ctx.fillStyle = "rgba(200,130,90,0.4)";
-  for (let y = -50; y < 0; y += 18) ctx.fillRect(-24, y, 48, 6);
+  ctx.fillStyle = "#ff5fa8";
+  for (let y = -66; y < 6; y += 18) { ctx.beginPath(); ctx.moveTo(-24, y + 12); ctx.lineTo(24, y - 4); ctx.lineTo(24, y + 5); ctx.lineTo(-24, y + 21); ctx.closePath(); ctx.fill(); }
   ctx.restore();
-  arch(0, 0, 14, 22);
+  shape(() => { ctx.moveTo(-20, 0); ctx.lineTo(20, 0); ctx.lineTo(12, -60); ctx.lineTo(-12, -60); ctx.closePath(); }, "rgba(0,0,0,0)");
+  arch(0, 0, 14, 22, "#a8483a");
   window_(-5, -44, 10, 10, true);
-  tri([-17, -58], [0, -78], [17, -58], vg(-78, -58, "#ff8a7a", "#d9473b"), 3.4);
+  tri([-17, -58], [0, -78], [17, -58], vg(-78, -58, "#ffb0d0", "#ff5fa8"), 3.4);
   const a = clock * 0.9;
+  const sail = ["#ff5fa8", "#4fc3ff", "#ffd23f", "#8a4dff"];
   for (let i = 0; i < 4; i++) {
     ctx.save();
     ctx.translate(0, -66);
     ctx.rotate(a + (i * Math.PI) / 2);
-    box(-4, -52, 10, 48, 2, "#ffffff", 2.6);
-    ctx.strokeStyle = "rgba(58,26,106,0.55)"; ctx.lineWidth = 1.6;
-    for (let y = -48; y < -8; y += 9) { ctx.beginPath(); ctx.moveTo(-4, y); ctx.lineTo(6, y); ctx.stroke(); }
+    box(-5, -54, 12, 50, 3, "#ffffff", 2.6);
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(-5, -54, 12, 50, 3); ctx.clip();
+    ctx.fillStyle = sail[i]!;
+    for (let y = -52; y < -6; y += 12) { ctx.beginPath(); ctx.moveTo(-6, y + 8); ctx.lineTo(8, y); ctx.lineTo(8, y + 5); ctx.lineTo(-6, y + 13); ctx.closePath(); ctx.fill(); }
+    ctx.restore();
     ctx.restore();
   }
-  disc(0, -66, 6, "#ffd23a", 2.8);
+  disc(0, -66, 7, vg(-73, -59, "#ffb0d0", "#ff5fa8"), 2.8);
+  ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 1.6;
+  ctx.beginPath(); for (let t = 0.5; t < 11; t += 0.5) { const r = t * 0.5; ctx.lineTo(Math.cos(t + clock) * r, -66 + Math.sin(t + clock) * r); } ctx.stroke();
 }
 
 function lighthouse(clock: number): void {
@@ -246,6 +253,61 @@ function rocket(clock: number): void {
   ctx.fillStyle = "rgba(255,255,255,0.7)"; ctx.beginPath(); ctx.arc(-2.5, -51, 2.2, 0, Math.PI * 2); ctx.fill();
 }
 
+function gingerbread(clock: number): void {
+  box(-32, -40, 64, 40, 5, vg(-40, 0, "#d49a5e", "#a8683a"));
+  shape(() => { ctx.moveTo(-32, -40); for (let x = -32; x < 32; x += 8) ctx.quadraticCurveTo(x + 4, -32, x + 8, -40); ctx.lineTo(32, -44); ctx.lineTo(-32, -44); ctx.closePath(); }, "#ffffff", 2.4);
+  tri([-42, -42], [0, -80], [42, -42], vg(-80, -42, "#ffe3f2", "#ffb3d6"), 3.4);
+  const gum = ["#ff5fa8", "#4fc3ff", "#ffd23f", "#3fd6a0", "#8a4dff"];
+  for (const [x, y, c] of [[-24, -50, 0], [-12, -62, 1], [0, -72, 2], [12, -62, 3], [24, -50, 4]] as const) disc(x, y, 4.4, gum[c]!, 2);
+  box(14, -80, 9, 24, 2, "#b5523b");
+  smoke(18.5, -82, clock, "rgba(255,255,255,0.95)");
+  arch(-9, 0, 16, 28, "#ff7fb0");
+  disc(-5, -12, 2.2, "#ffd23f", 1.2);
+  window_(12, -32, 15, 15, true);
+  box(10, -15, 19, 5, 2, "#ffffff", 2);
+  for (const x of [-35, 35]) {
+    ctx.lineCap = "round";
+    ctx.strokeStyle = INK; ctx.lineWidth = 6.6; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, -26); ctx.stroke();
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3.6; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, -26); ctx.stroke();
+    ctx.setLineDash([3.5, 4]); ctx.strokeStyle = "#ff3f6c"; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, -26); ctx.stroke(); ctx.setLineDash([]);
+  }
+}
+
+function cakeTower(clock: number): void {
+  shape(() => ctx.ellipse(0, 1, 46, 8, 0, 0, Math.PI * 2), "#ffffff", 2.6);
+  const tiers: [number, number, number, string, string][] = [[0, 70, 26, "#ffb3d6", "#ff7fb8"], [-26, 52, 24, "#fff0d6", "#f2d09a"], [-50, 36, 22, "#9a5a3a", "#6f3a24"]];
+  for (const [y, w, h, hi, lo] of tiers) {
+    box(-w / 2, y - h, w, h, 6, vg(y - h, y, hi, lo));
+    shape(() => { ctx.moveTo(-w / 2, y - h + 2); for (let x = -w / 2; x < w / 2; x += 9) ctx.quadraticCurveTo(x + 4.5, y - h + 12, x + 9, y - h + 2); ctx.lineTo(w / 2, y - h - 4); ctx.lineTo(-w / 2, y - h - 4); ctx.closePath(); }, "#ffffff", 2.2);
+  }
+  const sp = ["#ff5fa8", "#ffd23f", "#4fc3ff", "#3fd6a0"];
+  for (const [x, y, c] of [[-24, -12, 0], [-8, -6, 1], [10, -14, 2], [26, -8, 3], [-14, -38, 3], [8, -34, 0], [-4, -62, 1], [10, -64, 2]] as const) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(x * 0.2); ctx.fillStyle = sp[c]!; ctx.beginPath(); ctx.roundRect(-3.2, -1.2, 6.4, 2.4, 1.2); ctx.fill(); ctx.restore();
+  }
+  disc(0, -78, 6, "#ff3f6c", 2.4);
+  box(10, -88, 5, 16, 2, "#ffffff", 2);
+  const fl = 1 + Math.sin(clock * 12) * 0.2;
+  shape(() => { ctx.moveTo(12.5, -92); ctx.quadraticCurveTo(17, -98 * fl, 12.5, -104 * fl); ctx.quadraticCurveTo(8, -98 * fl, 12.5, -92); }, "#ffb02a", 1.8);
+}
+
+function lollipopTower(clock: number): void {
+  box(-5, -78, 10, 78, 4, "#ffffff", 3);
+  ctx.save();
+  ctx.beginPath(); ctx.roundRect(-5, -78, 10, 78, 4); ctx.clip();
+  ctx.fillStyle = "#ff5fa8";
+  for (let y = -80; y < 0; y += 14) { ctx.beginPath(); ctx.moveTo(-6, y + 10); ctx.lineTo(6, y); ctx.lineTo(6, y + 5); ctx.lineTo(-6, y + 15); ctx.closePath(); ctx.fill(); }
+  ctx.restore();
+  ctx.save();
+  ctx.translate(0, -104);
+  ctx.rotate(Math.sin(clock * 0.8) * 0.05);
+  disc(0, 0, 30, vg(-30, 30, "#ffd0ec", "#ff5fa8"), 3.4);
+  ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 5; ctx.lineCap = "round";
+  ctx.beginPath(); for (let a = 0.4; a < 22; a += 0.3) { const r = 1.15 * a; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r); } ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,0.7)"; ctx.beginPath(); ctx.ellipse(-12, -17, 8, 4.5, -0.6, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  for (const [x, c] of [[-14, "#4fc3ff"], [12, "#3fd6a0"], [0, "#ffb02a"]] as const) disc(x, -4, 6.5, c, 2.4);
+}
+
 /** Draws a landmark in its 100-unit design space. `clock` is seconds, for the little animations. */
 export function drawLandmark(kind: LandmarkKind, clock: number): void {
   switch (kind) {
@@ -267,5 +329,8 @@ export function drawLandmark(kind: LandmarkKind, clock: number): void {
     case "iceCastle": return castle(clock, "#e6f6ff", "#a8d4f0", "#5aa0e8", "#9fd0ff");
     case "observatory": return observatory(clock);
     case "rocket": return rocket(clock);
+    case "gingerbread": return gingerbread(clock);
+    case "cakeTower": return cakeTower(clock);
+    case "lollipopTower": return lollipopTower(clock);
   }
 }

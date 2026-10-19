@@ -7,7 +7,10 @@ import { seeded } from "./rng";
 export const LEVELS_PER_WORLD = 15;
 
 export type Particle = "petal" | "bubble" | "dust" | "snow" | "firefly" | "ember" | "sparkle" | "star";
-export type Deco = "tree" | "flower" | "palm" | "shell" | "cactus" | "rock" | "pine" | "mushroom" | "crystal" | "puff";
+export type Deco =
+  | "tree" | "flower" | "palm" | "shell" | "cactus" | "rock" | "pine" | "mushroom" | "crystal" | "puff"
+  // sweets
+  | "lollipop" | "candyCane" | "cupcake" | "donut" | "gumdrop" | "cottonBush" | "iceCream" | "cookie";
 
 export interface World {
   name: string;
@@ -21,16 +24,16 @@ export interface World {
 }
 
 export const WORLDS: readonly World[] = [
-  { name: "Meadow Fields", ground: ["#5fbf5a", "#86d672"], patch: "#a4e58a", road: "#f4e3b5", accent: "#ff6f91", decos: ["tree", "tree", "flower"], particle: "petal", night: false },
-  { name: "Coral Bay", ground: ["#2fa6cf", "#63d3e8"], patch: "#9cecf2", road: "#ffe7b0", accent: "#ff9f43", decos: ["palm", "shell", "rock"], particle: "bubble", night: false },
-  { name: "Amber Dunes", ground: ["#e09a4a", "#f5c86e"], patch: "#fadb93", road: "#fff1d0", accent: "#3fb6ef", decos: ["cactus", "rock", "cactus"], particle: "dust", night: false },
-  { name: "Frost Peaks", ground: ["#a9cdf0", "#e6f3ff"], patch: "#ffffff", road: "#d6e4f5", accent: "#7c6cff", decos: ["pine", "pine", "rock"], particle: "snow", night: false },
-  { name: "Twilight Woods", ground: ["#241f4f", "#3f3a80"], patch: "#5550a0", road: "#c9b8ff", accent: "#ffcf4a", decos: ["mushroom", "pine", "mushroom"], particle: "firefly", night: true },
-  { name: "Ember Ridge", ground: ["#3a1616", "#6a2c22"], patch: "#8a3a26", road: "#ffc29a", accent: "#ff7a3d", decos: ["rock", "crystal", "rock"], particle: "ember", night: true },
-  { name: "Crystal Caverns", ground: ["#1d1840", "#3a2f6b"], patch: "#4c3f8a", road: "#b9f7ec", accent: "#3ee6c4", decos: ["crystal", "crystal", "rock"], particle: "sparkle", night: true },
-  { name: "Cloud Kingdom", ground: ["#c7b8ff", "#ffd9ec"], patch: "#ffffff", road: "#ffffff", accent: "#ff5fa8", decos: ["puff", "puff", "flower"], particle: "sparkle", night: false },
-  { name: "Starfall", ground: ["#0b1030", "#1e2a5c"], patch: "#2a3878", road: "#ffe9a8", accent: "#ffd84a", decos: ["crystal", "rock", "crystal"], particle: "star", night: true },
-  { name: "Aurora Coast", ground: ["#0f2330", "#1f5464"], patch: "#2c7184", road: "#c8fff0", accent: "#6fffd2", decos: ["pine", "crystal", "pine"], particle: "snow", night: true },
+  { name: "Sugar Meadow", ground: ["#f59fd2", "#ffd3ee"], patch: "#ffeaf7", road: "#ffffff", accent: "#ff4f9a", decos: ["lollipop", "cottonBush", "candyCane"], particle: "petal", night: false },
+  { name: "Gumdrop Bay", ground: ["#5cc3f2", "#aee8ff"], patch: "#e2f8ff", road: "#ffffff", accent: "#ff8a3d", decos: ["gumdrop", "iceCream", "donut"], particle: "bubble", night: false },
+  { name: "Caramel Dunes", ground: ["#f0a850", "#ffd98c"], patch: "#ffeab9", road: "#ffffff", accent: "#8a4dff", decos: ["cookie", "gumdrop", "candyCane"], particle: "dust", night: false },
+  { name: "Mint Frost", ground: ["#8fe6d2", "#e8fff8"], patch: "#ffffff", road: "#ffffff", accent: "#ff5fa8", decos: ["candyCane", "iceCream", "cupcake"], particle: "snow", night: false },
+  { name: "Cocoa Woods", ground: ["#45263a", "#744358"], patch: "#8f5a74", road: "#ffd9ec", accent: "#ffcf4a", decos: ["lollipop", "cookie", "cottonBush"], particle: "firefly", night: true },
+  { name: "Caramel Ridge", ground: ["#55281a", "#8a482a"], patch: "#a8603a", road: "#ffe2c4", accent: "#ff7a3d", decos: ["cookie", "gumdrop", "candyCane"], particle: "ember", night: true },
+  { name: "Jelly Caverns", ground: ["#251658", "#523a9a"], patch: "#6c4cc0", road: "#e6dcff", accent: "#3ee6c4", decos: ["gumdrop", "gumdrop", "lollipop"], particle: "sparkle", night: true },
+  { name: "Cotton Cloud Kingdom", ground: ["#e2d2ff", "#ffe2f2"], patch: "#ffffff", road: "#ffffff", accent: "#ff5fa8", decos: ["cottonBush", "cupcake", "lollipop"], particle: "sparkle", night: false },
+  { name: "Sprinkle Night", ground: ["#170f48", "#382888"], patch: "#4a38a8", road: "#ffe9f6", accent: "#ffd84a", decos: ["lollipop", "gumdrop", "donut"], particle: "star", night: true },
+  { name: "Rainbow Coast", ground: ["#1c5262", "#37999c"], patch: "#52b8b8", road: "#e8fff8", accent: "#ff6fa8", decos: ["donut", "iceCream", "candyCane"], particle: "snow", night: true },
 ];
 
 /** Index into WORLDS for a level; past the last world they repeat. */
@@ -107,12 +110,13 @@ export const opensWorld = (n: number): boolean => n > 1 && (n - 1) % LEVELS_PER_
 
 export type LandmarkKind =
   | "cottage" | "beachHut" | "cabin" | "cloudHome" | "windmill" | "lighthouse" | "pyramid" | "tent" | "igloo"
-  | "mushroom" | "witchTower" | "emberTower" | "crystalTower" | "volcano" | "castle" | "iceCastle" | "observatory" | "rocket";
+  | "mushroom" | "witchTower" | "emberTower" | "crystalTower" | "volcano" | "castle" | "iceCastle" | "observatory" | "rocket"
+  | "gingerbread" | "cakeTower" | "lollipopTower";
 
 /** The two landmarks of each world, in world order (they repeat with the worlds). */
 export const LANDMARKS: readonly (readonly [LandmarkKind, LandmarkKind])[] = [
-  ["cottage", "windmill"], ["lighthouse", "beachHut"], ["pyramid", "tent"], ["igloo", "cabin"], ["mushroom", "witchTower"],
-  ["volcano", "emberTower"], ["crystalTower", "observatory"], ["castle", "cloudHome"], ["observatory", "rocket"], ["iceCastle", "cabin"],
+  ["gingerbread", "windmill"], ["lighthouse", "cakeTower"], ["pyramid", "tent"], ["igloo", "gingerbread"], ["mushroom", "lollipopTower"],
+  ["volcano", "cakeTower"], ["crystalTower", "observatory"], ["castle", "cloudHome"], ["observatory", "rocket"], ["iceCastle", "lollipopTower"],
 ];
 
 export interface Landmark { x: number; y: number; kind: LandmarkKind; scale: number; flip: boolean; phase: number }
