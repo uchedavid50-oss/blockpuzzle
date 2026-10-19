@@ -12,9 +12,12 @@ import { isMuted, sfx, soundState, toggleMute, unlock } from "./sound";
 
 import { canvas, ctx, W, H, dpr, cell, boardX, boardY, trayY, trayCell, COLORS, FONT, reduceMotion, layoutView, setReduceMotion, block, emptyCell, drawShape, drawCentered, easeOutBack, label, pill } from "./gfx";
 import { BADGES, PALETTE, THEMES, badgesSeen, bumpStreak, checkBadges, cycleTheme, has, markBadgesSeen, markThemeShown, perkUndos, playedDailyToday, saveStats, stats, streakNow, themeIdx, themeShownAt, today, toasts, unlocked } from "./progress";
-import { clearOfficial, markWeeklyCompleted, officialResult, parFor, readJourney, saveOfficial, weeklyCompleted, writeJourney } from "./records";
-import { CARD_H, HINT_KEY, MODES_H, PRAISE, TABS, archiveDates, badgeCell, chHit, drawChallengeIntro, drawHint, drawModes, drawPraise, drawSettings, drawStats, drawToast, modesLayout, settingsLayout, settingsTap, statsLayout, tabRect, ui, type Praise } from "./overlays";
+import { clearOfficial, markWeeklyCompleted, officialResult, parFor, postedResult, readJourney, saveOfficial, savePosted, weeklyCompleted, writeJourney } from "./records";
+import { CARD_H, HINT_KEY, MODES_H, PRAISE, TABS, archiveDates, badgeCell, chHit, drawChallengeIntro, drawHint, drawLeaderboard, drawModes, drawPraise, drawSettings, drawStats, drawToast, lbLayout, lbTap, modesLayout, modesRow, settingsLayout, settingsTap, statsLayout, tabRect, ui, type Praise } from "./overlays";
+import { askName } from "./nameDialog";
+import { checkLeaderboard, fetchBoard, fetchStreaks, getPlayer, lb, postDaily, savePlayerName } from "./leaderboardClient";
 import { settings } from "./settings";
+import type { MoveTuple } from "./verify";
 
 interface State {
   grid: Grid;
@@ -37,6 +40,7 @@ interface State {
   lines: number; // lines cleared this game
   won: boolean; // journey level cleared
   stars: number;
+  moveLog: MoveTuple[]; // every placement, so a daily can be replayed and verified by the leaderboard
 }
 
 type Kind = "classic" | "zen" | "weekly" | "journey";
@@ -89,14 +93,16 @@ function newState(o: GameOpts = {}): State {
   return {
     grid, tray: makeTray(grid, seed, 0), score: 0, best: loadBest(daily), combo: 0, over: false, daily, trays: 1,
     undoLeft, seed, challenge: o.ch ? o.ch.target : null, kind, practice, level, week,
-    wk: kind === "weekly" ? blankRun() : null, moves: 0, lines: 0, won: false, stars: 0,
+    wk: kind === "weekly" ? blankRun() : null, moves: 0, lines: 0, won: false, stars: 0, moveLog: [],
   };
 }
 
 /** Records today's first attempt (see records.ts). `abandoned` marks one walked away from mid-game. */
 function recordOfficial(abandoned: boolean): void {
   if (!state.daily || state.practice || officialResult(state.daily)) return;
-  saveOfficial(state.daily, { score: state.score, board: boardEmoji(state.grid, colorGrid), ...(abandoned ? { abandoned: true } : {}) });
+  // Moves are kept only if the log is complete (a game begun before moves were recorded cannot be verified).
+  const moves = state.moveLog.length === state.moves ? [...state.moveLog] : undefined;
+  saveOfficial(state.daily, { score: state.score, board: boardEmoji(state.grid, colorGrid), ...(abandoned ? { abandoned: true } : {}), ...(moves ? { moves } : {}) });
 }
 
 // ---- Saving a game in progress ------------------------------------------------
@@ -122,6 +128,7 @@ function save(): void {
       wk: state.wk,
       mv: state.moves,
       ln: state.lines,
+      ml: state.moveLog,
       k: colorGrid.flat().map((v) => (v < 0 ? "-" : String(v))).join(""),
     }));
   } catch { /* ignore */ }
@@ -131,7 +138,7 @@ function load(): State | null {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
-    const d = JSON.parse(raw) as { g: string; t: number[]; s: number; c: number; k?: string; d?: string | null; n?: number; u?: number; sd?: string; ch?: number | null; kd?: Kind; pr?: boolean; lv?: number | null; wid?: string | null; wk?: WeeklyRun | null; mv?: number; ln?: number };
+    const d = JSON.parse(raw) as { g: string; t: number[]; s: number; c: number; k?: string; d?: string | null; n?: number; u?: number; sd?: string; ch?: number | null; kd?: Kind; pr?: boolean; lv?: number | null; wid?: string | null; wk?: WeeklyRun | null; mv?: number; ln?: number; ml?: unknown };
     if (typeof d?.g !== "string" || d.g.length !== SIZE * SIZE || !Array.isArray(d.t)) return null;
     const grid = Array.from({ length: SIZE }, (_, r) =>
       Array.from({ length: SIZE }, (_, c) => d.g[r * SIZE + c] === "1"));
@@ -157,6 +164,7 @@ function load(): State | null {
       week: typeof d.wid === "string" ? d.wid : null,
       wk: d.wk && typeof d.wk.lines === "number" ? { ...blankRun(), ...d.wk } : null,
       moves: Number(d.mv) || 0, lines: Number(d.ln) || 0, won: false, stars: 0,
+      moveLog: Array.isArray(d.ml) ? (d.ml as unknown[]).filter((m): m is MoveTuple => Array.isArray(m) && m.length === 3 && m.every((n) => Number.isInteger(n))).slice(0, 3000) : [],
     };
   } catch {
     return null;
@@ -214,7 +222,7 @@ const THEME_C = (): [number, number] => [W - 58, 77];
 const MUTE_R = 14;
 const muteCenter = (): [number, number] => [W - 26, 77];
 
-interface Snapshot { grid: Grid; tray: (Shape | null)[]; score: number; combo: number; trays: number; colors: number[][]; moves: number; lines: number; wk: WeeklyRun | null }
+interface Snapshot { grid: Grid; tray: (Shape | null)[]; score: number; combo: number; trays: number; colors: number[][]; moves: number; lines: number; wk: WeeklyRun | null; moveLog: MoveTuple[] }
 let snap: Snapshot | null = null;
 
 const canUndo = (): boolean => !!snap && state.undoLeft > 0 && !state.over && !drag;
@@ -240,6 +248,7 @@ function undo(): void {
   state.combo = snap.combo;
   state.trays = snap.trays;
   state.moves = snap.moves;
+  state.moveLog = snap.moveLog;
   state.lines = snap.lines;
   state.wk = snap.wk && state.wk ? { ...snap.wk, undos: state.wk.undos + 1 } : snap.wk;
   state.undoLeft--;
@@ -260,14 +269,19 @@ function startGame(o: GameOpts): void {
 }
 
 let moves = 0; // placements this session, to time the install nudge
-let overPress: "share" | "again" | "mode" | "undo" | null = null;
+let overPress: "share" | "again" | "mode" | "undo" | "board" | null = null;
 let sharedAt = -10; // clock time of the last "copied" confirmation
 
-function overHit(x: number, y: number): "share" | "again" | "mode" | "undo" {
+/** Today's finished first attempt can open the leaderboard from the game-over card. */
+const lbButtonShown = (): boolean => lb.available && !!state.daily && !state.practice && state.daily === today() && state.kind === "classic";
+
+function overHit(x: number, y: number): "share" | "again" | "mode" | "undo" | "board" {
   if (Math.abs(x - W / 2) <= 96) {
-    if (canUndoOver() && y >= H / 2 + 214 && y <= H / 2 + 262) return "undo";
+    const dy = lbButtonShown() ? 56 : 0;
+    if (canUndoOver() && y >= H / 2 + 214 + dy && y <= H / 2 + 262 + dy) return "undo";
     if (y >= H / 2 + 104 && y <= H / 2 + 156) return "share";
-    if (y >= H / 2 + 160 && y <= H / 2 + 212) return "mode";
+    if (dy && y >= H / 2 + 160 && y <= H / 2 + 208) return "board";
+    if (y >= H / 2 + 160 + dy && y <= H / 2 + 212 + dy) return "mode";
   }
   return "again";
 }
@@ -413,6 +427,7 @@ function easeZen(): boolean {
 function pickMode(i: number): void {
   haptics.tick();
   if (i === 5) { ui.modesView = "archive"; return; }
+  if (i === 6) { ui.modesOn = false; openLeaderboard(); return; }
   ui.modesOn = false;
   if (i === 0) startGame({});
   else if (i === 1) startGame({ daily: today() });
@@ -420,6 +435,70 @@ function pickMode(i: number): void {
   else if (i === 3) startGame({ kind: "journey", level: readJourney().next });
   else startGame({ kind: "zen" });
 }
+
+// ---- Leaderboard flow -----------------------------------------------------------------
+
+/** Today's first attempt can be posted if it finished with a complete, replayable move list. */
+function canPostToday(): boolean {
+  const off = officialResult(today());
+  return !!off?.moves && off.moves.length > 0 && !postedResult(today());
+}
+
+function syncLeaderboardState(): void {
+  ui.lbCanPost = canPostToday();
+  const p = postedResult(today());
+  ui.lbPosted = p ? { rank: p.rank, total: p.total, score: p.score } : null;
+}
+
+async function refreshBoards(): Promise<void> {
+  ui.lbLoading = true;
+  syncLeaderboardState();
+  const [board, streaks] = await Promise.all([fetchBoard(today()), fetchStreaks()]);
+  ui.lbBoard = board;
+  ui.lbStreaks = streaks;
+  ui.lbLoading = false;
+  if (!board && !streaks) ui.lbMsg = "Could not load the leaderboard. Check your connection.";
+}
+
+function openLeaderboard(): void {
+  ui.lbOn = true; ui.lbT = 0; ui.lbTab = 0; ui.lbMsg = ""; ui.lbBoard = null; ui.lbStreaks = null;
+  void refreshBoards();
+}
+
+/** Asks for a nickname if needed, then posts the first attempt. The server verifies it by replaying the moves. */
+async function postMyScore(): Promise<void> {
+  const date = today();
+  const off = officialResult(date);
+  if (!off?.moves || postedResult(date)) return;
+  let name = getPlayer().name;
+  let problem = "";
+  for (;;) {
+    const entered = await askName(name, problem);
+    if (!entered) return;
+    ui.lbMsg = "Posting\u2026";
+    const r = await postDaily(date, off.moves, entered);
+    if (r.ok) {
+      savePlayerName(entered);
+      savePosted(date, { rank: r.rank, total: r.total, score: r.score, streak: r.streak });
+      ui.lbMsg = `Posted! You are #${r.rank} of ${r.total.toLocaleString("en-US")}.`;
+      sfx.praise(2);
+      haptic([20, 30, 20]);
+      await refreshBoards();
+      return;
+    }
+    if (r.error === "bad name") { name = entered; problem = r.message ?? "That name is not allowed."; continue; }
+    if (r.error === "already submitted") {
+      ui.lbMsg = "You already posted today.";
+      savePosted(date, { rank: 0, total: 0, score: off.score, streak: 0 });
+      await refreshBoards();
+      return;
+    }
+    ui.lbMsg = r.message ?? "Could not post your score.";
+    return;
+  }
+}
+
+void checkLeaderboard();
 
 // ---- Drag ----------------------------------------------------------------------
 
@@ -452,6 +531,7 @@ canvas.addEventListener("pointerdown", (e) => {
   if (ui.hintOn) { ui.hintPress = true; return; }
   if (ui.chIntro) { ui.chPress = chHit(e.clientX, e.clientY); return; }
   if (ui.statsOn) { ui.statsPress = { x: e.clientX, y: e.clientY }; return; }
+  if (ui.lbOn) { ui.lbPress = { x: e.clientX, y: e.clientY }; return; }
   if (ui.settingsOn) { ui.settingsPress = { x: e.clientX, y: e.clientY }; return; }
   if (ui.modesOn) { ui.modesPress = { x: e.clientX, y: e.clientY }; return; }
   if (state.over) {
@@ -487,6 +567,17 @@ canvas.addEventListener("pointermove", (e) => {
 });
 
 canvas.addEventListener("pointerup", (e) => {
+  if (ui.lbPress) {
+    const down = ui.lbPress;
+    ui.lbPress = null;
+    if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 12) return;
+    const l = lbLayout();
+    const act = lbTap((e.clientX - W / 2) / l.k, (e.clientY - H / 2) / l.k);
+    if (act === "close") ui.lbOn = false;
+    else if (act === "tab0" || act === "tab1") { ui.lbTab = act === "tab0" ? 0 : 1; ui.lbMsg = ""; haptics.tick(); }
+    else if (act === "post") void postMyScore();
+    return;
+  }
   if (ui.settingsPress) {
     const down = ui.settingsPress;
     ui.settingsPress = null;
@@ -525,9 +616,9 @@ canvas.addEventListener("pointerup", (e) => {
       return;
     }
     if (ui.modesView === "main") {
-      for (let i = 0; i < 6; i++) {
-        const y = -200 + i * 70;
-        if (ly >= y && ly <= y + 62 && Math.abs(lx) <= l.cw / 2 - 16) { pickMode(i); return; }
+      for (let i = 0; i < (lb.available ? 7 : 6); i++) {
+        const { y, h } = modesRow(i);
+        if (ly >= y && ly <= y + h && Math.abs(lx) <= l.cw / 2 - 16) { pickMode(i); return; }
       }
     } else {
       const dates = archiveDates();
@@ -577,6 +668,7 @@ canvas.addEventListener("pointerup", (e) => {
     if (overHit(e.clientX, e.clientY) !== want) return;
     if (want === "share") void shareScore();
     else if (want === "undo") undo();
+    else if (want === "board") openLeaderboard();
     else if (want === "mode") reset(state.kind !== "classic" ? {} : state.daily ? {} : { daily: today() });
     else if (state.kind === "journey") reset({ kind: "journey", level: (state.level ?? 1) + (state.won ? 1 : 0) });
     else if (state.kind !== "classic") reset({ kind: state.kind });
@@ -594,7 +686,7 @@ canvas.addEventListener("pointerup", (e) => {
     snap = {
       grid: state.grid, tray: [...state.tray], score: state.score, combo: state.combo,
       trays: state.trays, colors: colorGrid.map((r) => r.slice()),
-      moves: state.moves, lines: state.lines, wk: state.wk ? { ...state.wk } : null,
+      moves: state.moves, lines: state.lines, wk: state.wk ? { ...state.wk } : null, moveLog: [...state.moveLog],
     };
     if (state.daily === today() && !state.practice) bumpStreak();
     moves++;
@@ -696,6 +788,7 @@ canvas.addEventListener("pointerup", (e) => {
     state.score += gained;
     state.combo = res.combo;
     state.moves++;
+    state.moveLog.push([shapeIndex(drag.shape), t.row, t.col]);
     state.lines += lines;
     // Zen and journey games do not feed the score records: their goals are not a score race.
     const scored = state.kind === "classic" || state.kind === "weekly";
@@ -1200,7 +1293,8 @@ function render(dt: number): void {
     ctx.globalAlpha = e;
     ctx.translate(W / 2, H / 2 + (1 - e) * 24);
     const cw = Math.min(W - 48, 320);
-    const extra = canUndoOver() ? 52 : 0;
+    const dy = lbButtonShown() ? 56 : 0;
+    const extra = (canUndoOver() ? 52 : 0) + dy;
     const card = ctx.createLinearGradient(0, -145, 0, 225 + extra);
     card.addColorStop(0, "#222840");
     card.addColorStop(1, "#151a2a");
@@ -1274,17 +1368,30 @@ function render(dt: number): void {
 
     ctx.fillStyle = COLORS.dim;
     ctx.font = `600 15px ${FONT}`;
-    ctx.fillText(state.kind !== "classic" ? "Back to classic" : state.daily ? "Play a random game" : "Play today\u2019s daily", 0, 186);
+    if (dy) {
+      const posted = postedResult(state.daily!);
+      ctx.strokeStyle = "rgba(255,197,85,0.55)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.roundRect(-96, 162, 192, 44, 22);
+      ctx.stroke();
+      ctx.fillStyle = COLORS.combo;
+      ctx.font = `700 15px ${FONT}`;
+      ctx.fillText(posted && posted.rank > 0 ? `\u{1F3C6} Leaderboard \u00B7 #${posted.rank}` : "\u{1F3C6} Leaderboard", 0, 185);
+    }
+    ctx.fillStyle = COLORS.dim;
+    ctx.font = `600 15px ${FONT}`;
+    ctx.fillText(state.kind !== "classic" ? "Back to classic" : state.daily ? "Play a random game" : "Play today\u2019s daily", 0, 186 + dy);
     if (state.daily === today()) {
       // Plant the return trip while the player is still pleased with the result.
       const left = timeUntilMidnight(new Date());
       ctx.font = `500 12px ${FONT}`;
-      ctx.fillText(`Next daily in ${left.h}h ${String(left.m).padStart(2, "0")}m`, 0, 210);
+      ctx.fillText(`Next daily in ${left.h}h ${String(left.m).padStart(2, "0")}m`, 0, 210 + dy);
     }
     if (extra) {
       ctx.fillStyle = COLORS.combo;
       ctx.font = `700 15px ${FONT}`;
-      ctx.fillText("\u21B6 Undo last move", 0, 238);
+      ctx.fillText("\u21B6 Undo last move", 0, 238 + dy);
     }
     ctx.restore();
   }
@@ -1294,6 +1401,7 @@ function render(dt: number): void {
   if (ui.statsOn) drawStats();
   if (ui.modesOn) drawModes(dtLast);
   if (ui.settingsOn) drawSettings(dtLast);
+  if (ui.lbOn) drawLeaderboard(dtLast);
   if (ui.hintOn) drawHint(dtLast);
 }
 

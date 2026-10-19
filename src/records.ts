@@ -5,7 +5,10 @@
 // The first attempt at a given day is the record, and the only one that is shared as the result.
 // Later attempts at that date are practice.
 
-export interface Official { score: number; board: string; abandoned?: boolean }
+import type { MoveTuple } from "./verify";
+
+/** A day's first attempt. `moves` lets it be posted to the leaderboard later; it is absent if the game began before moves were recorded. */
+export interface Official { score: number; board: string; abandoned?: boolean; moves?: MoveTuple[] }
 export const officialKey = (date: string): string => `blockpuzzle.official.${date}`;
 export function officialResult(date: string): Official | null {
   try {
@@ -48,3 +51,15 @@ export function writeJourney(j: JourneyData): void {
   try { localStorage.setItem(JOURNEY_KEY, JSON.stringify(j)); } catch { /* ignore */ }
 }
 
+
+/** What the leaderboard said when a result was posted, so the game can show it without asking again. */
+export interface Posted { rank: number; total: number; score: number; streak: number }
+export function postedResult(date: string): Posted | null {
+  try {
+    const d = JSON.parse(localStorage.getItem(`blockpuzzle.posted.${date}`) ?? "null") as Posted | null;
+    return d && typeof d.rank === "number" ? d : null;
+  } catch { return null; }
+}
+export function savePosted(date: string, p: Posted): void {
+  try { localStorage.setItem(`blockpuzzle.posted.${date}`, JSON.stringify(p)); } catch { /* ignore */ }
+}

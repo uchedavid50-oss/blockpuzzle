@@ -2,8 +2,8 @@
 // give each day's daily a "par" score, so a score has a scale to be read against.
 // It plays by the real rules and the real tray generator; it never sees the human's game.
 
-import { SIZE, canPlace, emptyGrid, place, type Grid, type RegionShape, type Shape } from "./board";
-import { drawTray } from "./pieces";
+import { PERFECT_BONUS, SIZE, canPlace, emptyGrid, isEmpty, place, type Grid, type RegionShape, type Shape } from "./board";
+import { drawTray, shapeIndex } from "./pieces";
 import { seeded } from "./rng";
 
 /** How bad a board is to leave behind: cells walled in by blocks are hard to ever fill. */
@@ -69,6 +69,8 @@ export interface BotRun { score: number; lines: number; moves: number; doubles: 
 export function playBot(opts: {
   seed: string; maxMoves?: number; start?: Grid; beam?: number; rules?: Rules;
   stop?: (r: BotRun) => boolean;
+  /** Receives every placement as [piece index, row, col], so a game can be replayed or submitted. */
+  moveLog?: [number, number, number][];
 }): BotRun {
   const { seed, maxMoves = 120, beam = 3, rules = DEFAULT_RULES } = opts;
   let grid = opts.start ?? emptyGrid();
@@ -85,7 +87,8 @@ export function playBot(opts: {
       const res = place(grid, shape, m.r, m.c, combo, rules.regions);
       const lines = res.rowsCleared.length + res.colsCleared.length + res.regionsCleared.length;
       grid = res.grid;
-      run.score += res.points;
+      run.score += res.points + (lines > 0 && isEmpty(res.grid) ? PERFECT_BONUS : 0);
+      opts.moveLog?.push([shapeIndex(shape), m.r, m.c]);
       run.lines += lines;
       run.moves++;
       if (lines >= 2) run.doubles++;

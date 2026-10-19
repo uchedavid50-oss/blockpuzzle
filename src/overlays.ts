@@ -4,10 +4,11 @@
 
 import { ctx, W, H, dpr, cell, boardY, COLORS, FONT, reduceMotion, easeOutBack, setReduceMotion, star, paintScene } from "./gfx";
 import { isMuted, toggleMute } from "./sound";
+import { lb, type BoardData, type StreakData } from "./leaderboardClient";
 import { setSetting, settings } from "./settings";
 import { haptics } from "./haptics";
 import { PALETTE, BADGES, COLLECTION_SIZE, THEMES, TILE_ORDER, applyTheme, collectionTiles, perkUndos, rankName, readStreak, stats, streakNow, themeIdx, themeUnlocked, today, unlocked, type Toast } from "./progress";
-import { officialResult, parFor, readJourney, weeklyCompleted } from "./records";
+import { officialResult, parFor, postedResult, readJourney, weeklyCompleted } from "./records";
 import { BUCKET_LABELS } from "./meta";
 import { parseChallenge, type Challenge } from "./challenge";
 import { addDays, freezeAvailable, weekId } from "./streak";
@@ -48,6 +49,17 @@ export const ui = {
   settingsT: 0,
   settingsPress: null as { x: number; y: number } | null,
   settingsNote: "",
+  // leaderboard
+  lbOn: false,
+  lbT: 0,
+  lbTab: 0,
+  lbPress: null as { x: number; y: number } | null,
+  lbBoard: null as BoardData | null,
+  lbStreaks: null as StreakData | null,
+  lbLoading: false,
+  lbMsg: "",
+  lbCanPost: false, // today's first attempt is finished, verifiable and not yet posted
+  lbPosted: null as { rank: number; total: number; score: number } | null,
 };
 
 export const chHit = (x: number, y: number): "play" | "skip" | null =>
@@ -388,6 +400,8 @@ export function drawCollectionTab(cw: number): void {
 // ---- Modes sheet ------------------------------------------------------------------
 
 export const MODES_H = 580;
+/** Rows are slightly tighter when the leaderboard row is present, so everything still fits. */
+export const modesRow = (i: number): { y: number; h: number } => (lb.available ? { y: -200 + i * 60, h: 54 } : { y: -200 + i * 70, h: 62 });
 export function modesLayout(): { k: number; cw: number } {
   const k = Math.min(1, (H - 24) / MODES_H);
   return { k, cw: Math.min((W - 24) / k, 350) };
@@ -452,11 +466,12 @@ export function drawModes(dt: number): void {
       { icon: "\u{1F33F}", name: "Zen", sub: "No game over. Relax and clear lines." },
       { icon: "\u{1F5C2}", name: "Daily archive", sub: "Replay the last two weeks of dailies." },
     ];
+    if (lb.available) rows.push({ icon: "\u{1F3C6}", name: "Leaderboard", sub: "Today\u2019s top scores and longest streaks.", hot: !!off && !postedResult(t) && !!off.moves });
     rows.forEach((r, i) => {
-      const y = -200 + i * 70;
+      const { y, h } = modesRow(i);
       ctx.fillStyle = r.hot ? "rgba(255,197,85,0.09)" : "rgba(255,255,255,0.05)";
       ctx.beginPath();
-      ctx.roundRect(-cw / 2 + 16, y, cw - 32, 62, 16);
+      ctx.roundRect(-cw / 2 + 16, y, cw - 32, h, 16);
       ctx.fill();
       if (r.hot) {
         ctx.strokeStyle = "rgba(255,197,85,0.4)";
@@ -466,17 +481,17 @@ export function drawModes(dt: number): void {
       ctx.textAlign = "left";
       ctx.font = `600 24px ${FONT}`;
       ctx.fillStyle = COLORS.text;
-      ctx.fillText(r.icon, -cw / 2 + 30, y + 31);
+      ctx.fillText(r.icon, -cw / 2 + 30, y + h / 2);
       ctx.font = `700 15px ${FONT}`;
-      ctx.fillText(r.name, -cw / 2 + 68, y + 21, cw - 150);
+      ctx.fillText(r.name, -cw / 2 + 68, y + h * 0.34, cw - 150);
       ctx.fillStyle = COLORS.dim;
       ctx.font = `500 12px ${FONT}`;
-      ctx.fillText(r.sub, -cw / 2 + 68, y + 43, cw - 110);
+      ctx.fillText(r.sub, -cw / 2 + 68, y + h * 0.7, cw - 110);
       if (r.tag) {
         ctx.textAlign = "right";
         ctx.fillStyle = COLORS.combo;
         ctx.font = `800 12px ${FONT}`;
-        ctx.fillText(r.tag, cw / 2 - 28, y + 21);
+        ctx.fillText(r.tag, cw / 2 - 28, y + h * 0.34);
       }
     });
   } else {
@@ -816,4 +831,178 @@ export function settingsTap(lx: number, ly: number): boolean {
     }
   }
   return false;
+}
+
+// ---- Leaderboard -------------------------------------------------------------------
+
+const LB_H = 600;
+export function lbLayout(): { k: number; cw: number } {
+  const k = Math.min(1, (H - 24) / LB_H);
+  return { k, cw: Math.min((W - 24) / k, 360) };
+}
+const LB_TABS = ["Today", "Streaks"] as const;
+const lbTabRect = (i: number, cw: number): { x: number; y: number; w: number; h: number } => {
+  const w = (cw - 48) / 2;
+  return { x: -cw / 2 + 24 + i * w, y: -250, w, h: 32 };
+};
+const LB_POST = { y: 172, h: 44 };
+
+export function drawLeaderboard(dt: number): void {
+  ui.lbT = Math.min(1, ui.lbT + dt * 3);
+  const l = lbLayout();
+  const e = 1 - Math.pow(1 - ui.lbT, 3);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = `rgba(7,9,14,${0.86 * e})`;
+  ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  ctx.globalAlpha = e;
+  ctx.translate(W / 2, H / 2 + (1 - e) * 24);
+  ctx.scale(l.k, l.k);
+  const cw = l.cw;
+  const card = ctx.createLinearGradient(0, -LB_H / 2, 0, LB_H / 2);
+  card.addColorStop(0, "#222840");
+  card.addColorStop(1, "#151a2a");
+  ctx.shadowColor = "rgba(0,0,0,0.6)";
+  ctx.shadowBlur = 40;
+  ctx.fillStyle = card;
+  ctx.beginPath();
+  ctx.roundRect(-cw / 2, -LB_H / 2, cw, LB_H, 26);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(255,255,255,0.09)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+  ctx.fillStyle = COLORS.text;
+  ctx.font = `800 22px ${FONT}`;
+  ctx.fillText("Leaderboard", 0, -276);
+  LB_TABS.forEach((name, i) => {
+    const r = lbTabRect(i, cw);
+    const on = ui.lbTab === i;
+    ctx.fillStyle = on ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.04)";
+    ctx.beginPath();
+    ctx.roundRect(r.x + 2, r.y, r.w - 4, r.h, 16);
+    ctx.fill();
+    ctx.fillStyle = on ? COLORS.text : COLORS.dim;
+    ctx.font = `700 13px ${FONT}`;
+    ctx.fillText(name, r.x + r.w / 2, r.y + r.h / 2 + 1);
+  });
+
+  type Row = { rank: number; name: string; value: string; you: boolean };
+  let rows: Row[] = [];
+  let pinned: Row | null = null;
+  let header = "";
+  if (ui.lbTab === 0 && ui.lbBoard) {
+    rows = ui.lbBoard.top.map((t) => ({ rank: t.rank, name: t.name, value: t.score.toLocaleString("en-US"), you: t.you }));
+    header = `${today()} \u00B7 ${ui.lbBoard.total.toLocaleString("en-US")} player${ui.lbBoard.total === 1 ? "" : "s"}`;
+    if (ui.lbBoard.me && !rows.some((r) => r.you)) pinned = { rank: ui.lbBoard.me.rank, name: "You", value: ui.lbBoard.me.score.toLocaleString("en-US"), you: true };
+  } else if (ui.lbTab === 1 && ui.lbStreaks) {
+    rows = ui.lbStreaks.top.map((t) => ({ rank: t.rank, name: t.name, value: `${t.streak} day${t.streak === 1 ? "" : "s"}`, you: t.you }));
+    header = "Longest live daily streaks";
+    if (ui.lbStreaks.me && !rows.some((r) => r.you)) pinned = { rank: ui.lbStreaks.me.rank, name: "You", value: `${ui.lbStreaks.me.streak} days`, you: true };
+  }
+
+  ctx.fillStyle = COLORS.dim;
+  ctx.font = `600 12px ${FONT}`;
+  ctx.fillText(ui.lbLoading ? "Loading\u2026" : header, 0, -212, cw - 40);
+
+  const drawRow = (r: Row, y: number): void => {
+    if (r.you) {
+      ctx.fillStyle = "rgba(255,197,85,0.13)";
+      ctx.beginPath();
+      ctx.roundRect(-cw / 2 + 16, y - 14, cw - 32, 28, 10);
+      ctx.fill();
+    }
+    ctx.textAlign = "left";
+    const medal = r.rank <= 3 ? ["#ffd75e", "#cfd6e4", "#d99a5b"][r.rank - 1]! : null;
+    if (medal) {
+      ctx.fillStyle = medal;
+      ctx.beginPath();
+      ctx.arc(-cw / 2 + 36, y, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#2a1a00";
+      ctx.font = `800 12px ${FONT}`;
+      ctx.textAlign = "center";
+      ctx.fillText(String(r.rank), -cw / 2 + 36, y + 1);
+      ctx.textAlign = "left";
+    } else {
+      ctx.fillStyle = COLORS.dim;
+      ctx.font = `700 12px ${FONT}`;
+      ctx.fillText(String(r.rank), -cw / 2 + 28, y + 1);
+    }
+    ctx.fillStyle = r.you ? COLORS.combo : COLORS.text;
+    ctx.font = `700 14px ${FONT}`;
+    ctx.fillText(r.name, -cw / 2 + 58, y + 1, cw - 170);
+    ctx.textAlign = "right";
+    ctx.fillStyle = r.you ? COLORS.combo : COLORS.text;
+    ctx.fillText(r.value, cw / 2 - 28, y + 1);
+  };
+  rows.slice(0, 10).forEach((r, i) => drawRow(r, -186 + i * 31));
+  if (pinned) {
+    ctx.strokeStyle = "rgba(255,255,255,0.1)";
+    ctx.beginPath();
+    ctx.moveTo(-cw / 2 + 24, 138);
+    ctx.lineTo(cw / 2 - 24, 138);
+    ctx.stroke();
+    drawRow(pinned, 154);
+  }
+  if (!ui.lbLoading && rows.length === 0) {
+    ctx.textAlign = "center";
+    ctx.fillStyle = COLORS.dim;
+    ctx.font = `500 13px ${FONT}`;
+    ctx.fillText(ui.lbTab === 0 ? "No scores yet. Be the first!" : "No live streaks yet.", 0, -110);
+  }
+
+  // footer: posting, or where you stand
+  ctx.textAlign = "center";
+  if (ui.lbTab === 0 && ui.lbCanPost) {
+    const bg = ctx.createLinearGradient(0, LB_POST.y, 0, LB_POST.y + LB_POST.h);
+    bg.addColorStop(0, "#ffd166");
+    bg.addColorStop(1, "#f59e0b");
+    ctx.fillStyle = bg;
+    ctx.beginPath();
+    ctx.roundRect(-110, LB_POST.y, 220, LB_POST.h, 22);
+    ctx.fill();
+    ctx.fillStyle = "#2a1a00";
+    ctx.font = `800 15px ${FONT}`;
+    ctx.fillText("Post my daily score", 0, LB_POST.y + LB_POST.h / 2 + 1);
+  } else {
+    ctx.fillStyle = COLORS.dim;
+    ctx.font = `500 12px ${FONT}`;
+    const note = ui.lbTab === 1 ? "Streaks count the days you post a daily score."
+      : ui.lbPosted ? `You posted ${ui.lbPosted.score.toLocaleString("en-US")} \u00B7 #${ui.lbPosted.rank}`
+      : "Finish today\u2019s daily to join the board.";
+    ctx.fillText(note, 0, LB_POST.y + 22, cw - 40);
+  }
+  ctx.fillStyle = ui.lbMsg.startsWith("Posted") ? "#7fe3a8" : COLORS.dim;
+  ctx.font = `600 12px ${FONT}`;
+  ctx.fillText(ui.lbMsg, 0, 232, cw - 40);
+
+  const bg2 = ctx.createLinearGradient(0, 252, 0, 292);
+  bg2.addColorStop(0, "#6cb4ff");
+  bg2.addColorStop(1, "#3a82e6");
+  ctx.fillStyle = bg2;
+  ctx.beginPath();
+  ctx.roundRect(-84, 254, 168, 38, 19);
+  ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.font = `700 16px ${FONT}`;
+  ctx.fillText("Close", 0, 274);
+  ctx.restore();
+}
+
+export type LbAction = "close" | "tab0" | "tab1" | "post" | null;
+/** Maps a tap (card-local coordinates) to what it means. */
+export function lbTap(lx: number, ly: number): LbAction {
+  const { cw } = lbLayout();
+  if (Math.abs(lx) > cw / 2 || Math.abs(ly) > LB_H / 2) return "close";
+  if (ly >= 250 && ly <= 296 && Math.abs(lx) <= 90) return "close";
+  for (let i = 0; i < LB_TABS.length; i++) {
+    const r = lbTabRect(i, cw);
+    if (lx >= r.x && lx <= r.x + r.w && ly >= r.y && ly <= r.y + r.h) return i === 0 ? "tab0" : "tab1";
+  }
+  if (ui.lbTab === 0 && ui.lbCanPost && ly >= LB_POST.y - 4 && ly <= LB_POST.y + LB_POST.h + 4 && Math.abs(lx) <= 116) return "post";
+  return null;
 }
