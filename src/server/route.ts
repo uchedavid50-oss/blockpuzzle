@@ -1,8 +1,8 @@
 // Shared plumbing for the api/ routes: JSON responses, safe body parsing and store lookup.
 
-import { storeFromEnv } from "./redis";
-import type { Reply } from "./handlers";
-import type { Store } from "./store";
+import { storeFromEnv } from "./redis.js";
+import type { Reply } from "./handlers.js";
+import type { Store } from "./store.js";
 
 const MAX_BODY = 200_000; // a long game is well under this
 

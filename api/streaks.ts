@@ -1,5 +1,5 @@
-import { getStreaks } from "../src/server/handlers";
-import { withStore } from "../src/server/route";
+import { getStreaks } from "../src/server/handlers.js";
+import { withStore } from "../src/server/route.js";
 
 export function GET(request: Request): Promise<Response> {
   const q = new URL(request.url).searchParams;

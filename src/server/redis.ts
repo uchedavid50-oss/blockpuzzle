@@ -1,7 +1,7 @@
 // Redis over HTTP (the Upstash REST API, which Vercel's Redis integration provides). Each command is
 // a JSON array posted to the REST URL, so no client library is needed.
 
-import type { Store } from "./store";
+import type { Store } from "./store.js";
 
 type Fetch = typeof fetch;
 

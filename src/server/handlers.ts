@@ -1,10 +1,10 @@
 // The leaderboard's request handling, independent of any web framework: each function takes a store
 // and plain data and returns a status and a JSON body. The api/ routes are thin wrappers around these.
 
-import { applyPlay, currentStreak, type StreakRec } from "../streak";
-import { RULES_VERSION, replay, type MoveTuple } from "../verify";
-import { cleanName, dateAllowed, isDate, isPlayerId, utcToday } from "./rules";
-import type { Store } from "./store";
+import { applyPlay, currentStreak, type StreakRec } from "../streak.js";
+import { RULES_VERSION, replay, type MoveTuple } from "../verify.js";
+import { cleanName, dateAllowed, isDate, isPlayerId, utcToday } from "./rules.js";
+import type { Store } from "./store.js";
 
 export interface Reply { status: number; body: Record<string, unknown> }
 const reply = (status: number, body: Record<string, unknown>): Reply => ({ status, body });

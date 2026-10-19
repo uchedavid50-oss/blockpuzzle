@@ -1,4 +1,4 @@
-import { canPlaceAnywhere, type Grid, type Shape } from "./board";
+import { canPlaceAnywhere, type Grid, type Shape } from "./board.js";
 
 // Fixed orientations only: the player cannot rotate, so rotated variants are separate entries.
 const rect = (h: number, w: number): Shape =>

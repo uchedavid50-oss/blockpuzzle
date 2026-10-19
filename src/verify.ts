@@ -2,9 +2,9 @@
 // can be checked instead of trusted. The server uses this to verify leaderboard submissions; the
 // client records the same move list as it plays. Pure: no DOM, no storage.
 
-import { PERFECT_BONUS, canPlace, emptyGrid, hasMoves, isEmpty, place, type Grid, type Shape } from "./board";
-import { SHAPES, drawTray } from "./pieces";
-import { seeded } from "./rng";
+import { PERFECT_BONUS, canPlace, emptyGrid, hasMoves, isEmpty, place, type Grid, type Shape } from "./board.js";
+import { SHAPES, drawTray } from "./pieces.js";
+import { seeded } from "./rng.js";
 
 /** Bump when scoring, the rules or the piece set change: old replays no longer reproduce. */
 export const RULES_VERSION = 1;

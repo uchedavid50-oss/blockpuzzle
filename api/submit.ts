@@ -1,5 +1,5 @@
-import { submitScore } from "../src/server/handlers";
-import { json, readJson, withStore } from "../src/server/route";
+import { submitScore } from "../src/server/handlers.js";
+import { json, readJson, withStore } from "../src/server/route.js";
 
 export async function POST(request: Request): Promise<Response> {
   let body: unknown;
