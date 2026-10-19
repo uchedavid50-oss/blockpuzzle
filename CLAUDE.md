@@ -19,9 +19,11 @@ no rotation, no timer. Never reference Tetris in code, assets or naming.
 - Every random game is seeded, so a shared link replays the exact same pieces.
 
 ## Structure
-- Pure, tested modules (no DOM): board, rng, streak, share, meta, challenge, journey, weekly, solver.
-- main.ts holds the game loop, board rendering and input. gfx.ts has drawing primitives and layout,
-  overlays.ts the screens drawn over the game, progress.ts stats/badges/themes/streak, records.ts saved
+- Pure, tested modules (no DOM): board, rng, streak, share, meta, challenge, journey, weekly, solver, map.
+- main.ts holds the game loop, board rendering and input. gfx.ts has drawing primitives and layout
+  (including the shared candy look: sheets, ribbons, candy buttons, bubbly lettering),
+  overlays.ts the screens drawn over the game, mapView.ts the journey map (its path, worlds and
+  scenery layout are in map.ts), progress.ts stats/badges/themes/streak, records.ts saved
   records. Keep new logic in a pure module where it can be tested.
 - public/par.json is each day's par, played offline by a greedy bot (src/solver.ts).
   Regenerate it with `npm run par` whenever the rules or the piece set change, because par depends on both.
@@ -29,5 +31,14 @@ no rotation, no timer. Never reference Tetris in code, assets or naming.
   `npm run validate` checks journey, weekly goals and region shapes against the bot.
 
 ## Scope
-No ads, analytics or backend. No coin or booster economies, no obstacle or gem cells, and no
-adaptive difficulty. Do not add them unless I ask.
+No ads or analytics. No coin or booster economies, no obstacle or gem cells, and no adaptive
+difficulty. Do not add them unless I ask.
+
+The one backend is the leaderboard (api/ routes and src/server/), kept deliberately small:
+- Anonymous. A random player id and a public nickname; no accounts and no personal data.
+- Scores are never trusted. The client sends its list of moves and the server replays them with the
+  same board.ts, pieces.ts and rng.ts, so only a legal game can score. Bump RULES_VERSION in
+  src/verify.ts whenever scoring, the rules or the piece set change.
+- It is optional: the game hides every leaderboard control unless /api/health reports a store.
+- Storage is Redis over REST (Vercel's Redis integration). `npm run dev:api` runs the same routes
+  against an in-memory store for local testing.

@@ -1,6 +1,6 @@
 // Cache-first shell so the game opens instantly and works with no connection.
 // Bump CACHE on every release or browsers will serve the old build forever.
-const CACHE = "blockpuzzle-v14";
+const CACHE = "blockpuzzle-v16";
 
 self.addEventListener("install", (e) => {
   e.waitUntil(
@@ -19,6 +19,8 @@ self.addEventListener("activate", (e) => {
 
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
+  // The leaderboard API always comes from the network: a cached board or health check would be stale.
+  if (new URL(e.request.url).pathname.startsWith("/api/")) return;
   e.respondWith(
     caches.match(e.request).then((hit) =>
       hit ??

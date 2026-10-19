@@ -35,7 +35,8 @@ export const lb = { available: false };
 async function call(path: string, init?: RequestInit): Promise<Response> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 8000);
-  try { return await fetch(path, { ...init, signal: ctl.signal }); } finally { clearTimeout(timer); }
+  // no-store: the server lets shared caches keep boards for a few seconds, but this player must always see their own just-posted score.
+  try { return await fetch(path, { ...init, cache: "no-store", signal: ctl.signal }); } finally { clearTimeout(timer); }
 }
 
 export async function checkLeaderboard(): Promise<void> {

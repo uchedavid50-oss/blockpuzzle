@@ -43,6 +43,7 @@ createServer(async (req, res) => {
   for await (const c of req) chunks.push(c as Buffer);
   const body = chunks.length ? Buffer.concat(chunks) : undefined;
   const response = await handler(new Request(url, { method: req.method, headers: req.headers as Record<string, string>, body: req.method === "POST" ? body : undefined }));
+  if (process.env.DEV_API_LOG) console.log(`${new Date().toISOString().slice(11, 23)} ${req.method} ${url.pathname}${url.search.slice(0, 50)} -> ${response.status}`);
   res.writeHead(response.status, Object.fromEntries(response.headers));
   res.end(Buffer.from(await response.arrayBuffer()));
 }).listen(8787, () => console.log("dev API on http://localhost:8787"));

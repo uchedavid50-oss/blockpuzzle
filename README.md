@@ -44,6 +44,14 @@ every colour), a calmer-visuals option, and a theme picker that includes limited
   <img src="docs/screens/settings.png" width="220" alt="Settings">
 </p>
 
+## Leaderboard
+
+Post your first daily attempt to a global board, and see the longest live daily streaks. It is
+optional, anonymous and verified: you pick a public nickname (no account, no personal data), and the
+server never trusts a score. Your game sends its list of moves and the server replays them with the
+same rules code, so only a legal game can score. (That proves a game was legal, not that a human played
+it.) Streaks are counted from the days you post.
+
 ## Run it
 
 ```bash
@@ -51,6 +59,7 @@ npm install
 npm run dev        # local dev server
 npm test           # unit tests for the game logic
 npm run build      # type-check and build to dist/
+npm run dev:api    # local leaderboard API (in-memory), for use with npm run dev
 ```
 
 TypeScript (strict), Vite and Canvas 2D. No game engine and no runtime dependencies.
