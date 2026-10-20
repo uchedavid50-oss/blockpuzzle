@@ -54,11 +54,22 @@ it.) Streaks are counted from the days you post.
 
 ## Privacy, ads and purchases
 
-There is no tracking by default. The code for anonymous, self-hosted analytics (an opaque random id, no
-personal data, no third-party SDK), an ad wrapper and a purchases model is in the repo, but it does
-nothing until you configure it: analytics need `VITE_ANALYTICS_ENDPOINT`, ads need an ad network on the
-page, and purchases need a server to verify them. None of it can change the rules or the leaderboard:
-ads never reward anything in the daily, the weekly or a challenge.
+Everything here is off until configured, and none of it can change the rules or the leaderboard.
+
+- **Usage statistics**: the server's own collector (`/api/collect`, aggregate counts only, report at
+  `/admin.html` with `ADMIN_TOKEN`). The game asks once, and sends nothing (and creates no id) until the
+  player says yes. Settings can turn it off again, which also deletes the id. Build-time override:
+  `VITE_ANALYTICS_ENDPOINT`.
+- **Shop** (Paystack, NGN): shown only when `PAYSTACK_SECRET_KEY` is set. Prices are decided and payments
+  verified on the server; set the webhook to `/api/paystack-webhook`. `PAYSTACK_USD=1` enables USD.
+  Items are cosmetic or remove ads: no-interruptions, two theme packs, clear effects, and a supporter
+  bundle that adds a star beside your name on the boards. A restore code moves purchases to another device.
+- **Ads**: loaded only when `VITE_ADSENSE_CLIENT` (a `ca-pub-` id) is set at build time; `VITE_ADSENSE_TEST=1`
+  uses Google's test mode. A rewarded "watch an ad to undo" appears on game over (never in the daily, weekly
+  or a challenge) and an interstitial may precede "Play again" (every 3 runs, 5 minute cooldown, never for
+  owners of "No interruptions"). If the script is blocked, nothing is shown.
+
+Test the shop locally with `npm run dev:api` (a fake Paystack that is refused on Vercel).
 
 ## Run it
 

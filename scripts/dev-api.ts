@@ -45,7 +45,7 @@ for (const [name, tag, maxMoves] of seedPlayers) {
 console.log(`seeded ${seedPlayers.length} players for ${today}`);
 
 createServer(async (req, res) => {
-  const url = new URL(req.url ?? "/", "http://localhost");
+  const url = new URL(req.url ?? "/", `http://${req.headers["x-forwarded-host"] ?? req.headers.host ?? "localhost"}`);
   const route = routes[url.pathname];
   const handler = route?.[req.method as "GET" | "POST"];
   if (!handler) { res.writeHead(404).end("not found"); return; }

@@ -54,6 +54,9 @@ export const ui = {
   settingsT: 0,
   settingsPress: null as { x: number; y: number } | null,
   settingsNote: "",
+  consentOn: false,
+  consentT: 0,
+  consentPress: null as { x: number; y: number } | null,
   settingsPage: "main" as "main" | "themes" | "shop",
   shopNote: "",
   shopBusy: false,
@@ -579,6 +582,46 @@ export function drawHint(dt: number): void {
 }
 
 
+// ---- Consent card (asked once, only where a usage collector exists) -----------------
+
+const CONSENT_H = 280;
+export function consentLayout(): { k: number; cw: number } {
+  const k = Math.min(1, (H - 24) / CONSENT_H);
+  return { k, cw: Math.min((W - 24) / k, 330) };
+}
+
+export function drawConsent(dt: number): void {
+  ui.consentT = Math.min(1, ui.consentT + dt * 3);
+  const l = consentLayout();
+  const e = 1 - Math.pow(1 - ui.consentT, 3);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  dim(e);
+  ctx.save();
+  ctx.globalAlpha = e;
+  ctx.translate(W / 2, H / 2 + (1 - e) * 24);
+  ctx.scale(l.k, l.k);
+  sheet(l.cw, CONSENT_H, "Help us improve?");
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = COLORS.dim;
+  ctx.font = `600 13px ${ROUND}`;
+  ["Share anonymous play statistics, such as", "which modes get played. No name, no", "account, no ads tracking. Change it any", "time in Settings."].forEach((t, i) => ctx.fillText(t, 0, -52 + i * 20, l.cw - 32));
+  candyButton(0, 70, 200, 46, "Yes, share", "green", 0, 17);
+  candyButton(0, 136, 200, 40, "No thanks", "violet", 0, 15);
+  ctx.restore();
+}
+
+/** Returns true once the player has chosen and the card should close. */
+export function consentTap(lx: number, ly: number): boolean {
+  if (Math.abs(lx) > 100) return false;
+  const choice = ly >= 44 && ly <= 96 ? "yes" : ly >= 112 && ly <= 160 ? "no" : null;
+  if (!choice) return false;
+  setConsent(choice);
+  applyConsent();
+  if (choice === "yes") track("session_start");
+  return true;
+}
+
 // ---- Settings sheet ----------------------------------------------------------------
 
 const SET_H = 640;
@@ -847,11 +890,11 @@ export function drawLeaderboard(dt: number): void {
   let pinned: Row | null = null;
   let header = "";
   if (ui.lbTab === 0 && ui.lbBoard) {
-    rows = ui.lbBoard.top.map((t) => ({ rank: t.rank, name: t.name, value: t.score.toLocaleString("en-US"), you: t.you }));
+    rows = ui.lbBoard.top.map((t) => ({ rank: t.rank, name: t.supporter ? `\u2605 ${t.name}` : t.name, value: t.score.toLocaleString("en-US"), you: t.you }));
     header = `${today()} \u00B7 ${ui.lbBoard.total.toLocaleString("en-US")} player${ui.lbBoard.total === 1 ? "" : "s"}`;
     if (ui.lbBoard.me && !rows.some((r) => r.you)) pinned = { rank: ui.lbBoard.me.rank, name: "You", value: ui.lbBoard.me.score.toLocaleString("en-US"), you: true };
   } else if (ui.lbTab === 1 && ui.lbStreaks) {
-    rows = ui.lbStreaks.top.map((t) => ({ rank: t.rank, name: t.name, value: `${t.streak} day${t.streak === 1 ? "" : "s"}`, you: t.you }));
+    rows = ui.lbStreaks.top.map((t) => ({ rank: t.rank, name: t.supporter ? `\u2605 ${t.name}` : t.name, value: `${t.streak} day${t.streak === 1 ? "" : "s"}`, you: t.you }));
     header = "Longest live daily streaks";
     if (ui.lbStreaks.me && !rows.some((r) => r.you)) pinned = { rank: ui.lbStreaks.me.rank, name: "You", value: `${ui.lbStreaks.me.streak} days`, you: true };
   }

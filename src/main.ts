@@ -14,12 +14,16 @@ import { canvas, ctx, W, H, dpr, cell, boardX, boardY, trayY, trayCell, COLORS, 
 import { worldOf } from "./map";
 import { BADGES, PALETTE, THEMES, badgesSeen, bumpStreak, checkBadges, cycleTheme, has, markBadgesSeen, markThemeShown, perkUndos, playedDailyToday, saveStats, stats, streakNow, themeIdx, themeShownAt, today, toasts, unlocked } from "./progress";
 import { clearOfficial, markWeeklyCompleted, officialResult, parFor, postedResult, readJourney, saveOfficial, savePosted, weeklyCompleted, writeJourney } from "./records";
-import { CARD_H, HINT_KEY, MODES_H, PRAISE, TABS, archiveDates, badgeCell, chHit, drawChallengeIntro, drawHint, drawLeaderboard, drawModes, drawPraise, drawSettings, drawStats, drawToast, lbLayout, lbTap, modesLayout, modesRow, settingsLayout, settingsTap, statsLayout, tabRect, ui, type Praise } from "./overlays";
+import { CARD_H, HINT_KEY, MODES_H, PRAISE, TABS, archiveDates, badgeCell, chHit, drawChallengeIntro, drawHint, drawLeaderboard, drawModes, drawPraise, drawSettings, consentLayout, consentTap, drawConsent, drawStats, drawToast, lbLayout, lbTap, modesLayout, modesRow, settingsLayout, settingsTap, statsLayout, tabRect, ui, type Praise } from "./overlays";
 import { askName } from "./nameDialog";
 import { checkLeaderboard, fetchBoard, fetchStreaks, getPlayer, lb, postDaily, savePlayerName } from "./leaderboardClient";
 import { settings } from "./settings";
 import type { MoveTuple } from "./verify";
 import { track } from "./analytics";
+import { AD_TIMEOUT_MS, afterInterstitial, afterRun, claimReward, freshFrequency, mayOfferRewarded, mayShowInterstitial, provider, type FrequencyState } from "./ads";
+import { adsReady, loadAds } from "./adLoader";
+import { isAdFree } from "./entitlements";
+import { ownership, ownsSku } from "./ownership";
 import { applyConsent, getConsent } from "./consent";
 import { handleReturn, syncEntitlements } from "./shopClient";
 import { drawMap, mapCancel, mapCovers, mapDown, mapMove, mapUi, mapUp, mapWheel, openMap, setMapHandlers } from "./mapView";
@@ -187,6 +191,9 @@ interface ClearCell { r: number; c: number; ci: number; delay: number; fired: bo
 interface Clear { cells: ClearCell[]; t: number; lines: number; count: number }
 interface Ring { x: number; y: number; t: number; max: number; color: string; w: number }
 let rings: Ring[] = [];
+// Effect pack (owned only): light sweeping along each cleared row/column.
+type Beam = { x1: number; y1: number; x2: number; y2: number; t: number };
+let beams: Beam[] = [];
 let praises: Praise[] = [];
 let flash = 0; // full-screen white pulse on big clears
 let jellyAmp = 0; // the board wobbles after a clear
@@ -262,7 +269,7 @@ function undo(): void {
   state.undoLeft--;
   colorGrid = snap.colors;
   pop = blankPop();
-  clears = []; particles = []; floaters = []; rings = []; shake = 0;
+  clears = []; particles = []; floaters = []; rings = []; beams = []; shake = 0;
   shownScore = state.score;
   snap = null;
   sfx.place();
@@ -289,6 +296,36 @@ setMapHandlers({
   resumable: resumableLevel,
 });
 
+// ---- Ads (all inert unless an ad network actually loaded; see adLoader.ts) ----
+const FREQ_KEY = "blockpuzzle.adfreq";
+let freq: FrequencyState = (() => {
+  try { const d = JSON.parse(localStorage.getItem(FREQ_KEY) ?? "null"); if (d && Number.isFinite(d.runsSinceAd) && Number.isFinite(d.lastAdAt)) return { runsSinceAd: d.runsSinceAd, lastAdAt: d.lastAdAt }; } catch { /* ignore */ }
+  return freshFrequency();
+})();
+const saveFreq = (): void => { try { localStorage.setItem(FREQ_KEY, JSON.stringify(freq)); } catch { /* ignore */ } };
+let adBusy = false;
+loadAds(import.meta.env.VITE_ADSENSE_CLIENT, import.meta.env.VITE_ADSENSE_TEST === "1");
+
+/** Out of undos on a lost game: offer one more, in exchange for watching an ad. Never in ranked modes. */
+const adUndoOffered = (): boolean =>
+  adsReady() && !adBusy && !!snap && state.undoLeft === 0 && state.over && !state.won && mayOfferRewarded(modeName());
+
+function watchAdUndo(): void {
+  adBusy = true;
+  void claimReward(provider(), state.kind === "journey" ? "journey_retry" : "classic_undo", (n, p) => track(n, p)).then((ok) => {
+    adBusy = false;
+    if (ok && state.over) { state.undoLeft = 1; undo(); }
+  });
+}
+
+/** Run `go`, after an interstitial if the frequency rules allow one. A failed or slow ad never blocks play. */
+function afterBreak(go: () => void): void {
+  if (adBusy || !adsReady() || !mayShowInterstitial(freq, Date.now(), isAdFree(ownership.ent))) { go(); return; }
+  adBusy = true;
+  const done = (): void => { adBusy = false; freq = afterInterstitial(freq, Date.now()); saveFreq(); go(); };
+  void Promise.race([provider().interstitial("between_runs"), new Promise<null>((r) => setTimeout(() => r(null), AD_TIMEOUT_MS))]).then(done, done);
+}
+
 let moves = 0; // placements this session, to time the install nudge
 let overPress: "share" | "again" | "mode" | "undo" | "board" | null = null;
 let sharedAt = -10; // clock time of the last "copied" confirmation
@@ -299,7 +336,7 @@ const lbButtonShown = (): boolean => lb.available && !!state.daily && !state.pra
 function overHit(x: number, y: number): "share" | "again" | "mode" | "undo" | "board" {
   if (Math.abs(x - W / 2) <= 96) {
     const dy = lbButtonShown() ? 56 : 0;
-    if (canUndoOver() && y >= H / 2 + 214 + dy && y <= H / 2 + 262 + dy) return "undo";
+    if ((canUndoOver() || adUndoOffered()) && y >= H / 2 + 214 + dy && y <= H / 2 + 262 + dy) return "undo";
     if (y >= H / 2 + 104 && y <= H / 2 + 156) return "share";
     if (dy && y >= H / 2 + 160 && y <= H / 2 + 208) return "board";
     if (y >= H / 2 + 160 + dy && y <= H / 2 + 212 + dy) return "mode";
@@ -358,7 +395,7 @@ function reset(o: GameOpts = {}): void {
   banked = null;
   challengeBeaten = false;
   shownScore = 0;
-  clears = []; particles = []; floaters = []; returning = []; rings = []; praises = []; flash = 0;
+  clears = []; particles = []; floaters = []; returning = []; rings = []; beams = []; praises = []; flash = 0;
   overT = 0;
   save();
 }
@@ -412,6 +449,7 @@ function endGame(): void {
   state.over = true;
   overT = 0;
   track("game_end", { mode: modeName(), score: state.score, moves: state.moves });
+  freq = afterRun(freq); saveFreq();
   sfx.gameOver();
   haptics.gameOver();
   if (state.kind === "classic" || state.kind === "weekly") {
@@ -568,6 +606,7 @@ canvas.addEventListener("pointerdown", (e) => {
   if (ui.chIntro) { ui.chPress = chHit(e.clientX, e.clientY); return; }
   if (ui.statsOn) { ui.statsPress = { x: e.clientX, y: e.clientY }; return; }
   if (ui.lbOn) { ui.lbPress = { x: e.clientX, y: e.clientY }; return; }
+  if (ui.consentOn) { ui.consentPress = { x: e.clientX, y: e.clientY }; return; }
   if (ui.settingsOn) { ui.settingsPress = { x: e.clientX, y: e.clientY }; return; }
   if (ui.modesOn) { ui.modesPress = { x: e.clientX, y: e.clientY }; return; }
   if (state.over) {
@@ -618,6 +657,12 @@ canvas.addEventListener("pointerup", (e) => {
     if (act === "close") ui.lbOn = false;
     else if (act === "tab0" || act === "tab1") { ui.lbTab = act === "tab0" ? 0 : 1; ui.lbMsg = ""; haptics.tick(); }
     else if (act === "post") void postMyScore();
+    return;
+  }
+  if (ui.consentPress) {
+    ui.consentPress = null;
+    const l = consentLayout();
+    if (consentTap((e.clientX - W / 2) / l.k, (e.clientY - H / 2) / l.k)) ui.consentOn = false;
     return;
   }
   if (ui.settingsPress) {
@@ -707,16 +752,16 @@ canvas.addEventListener("pointerup", (e) => {
   if (overPress && state.over) {
     const want = overPress;
     overPress = null;
-    if (overHit(e.clientX, e.clientY) !== want) return;
+    if (adBusy || overHit(e.clientX, e.clientY) !== want) return;
     if (want === "share") void shareScore();
-    else if (want === "undo") undo();
+    else if (want === "undo") { if (canUndoOver()) undo(); else if (adUndoOffered()) watchAdUndo(); }
     else if (want === "board") openLeaderboard();
     else if (want === "mode" && state.kind === "journey") openMap();
     else if (want === "mode") reset(state.kind !== "classic" ? {} : state.daily ? {} : { daily: today() });
     else if (state.kind === "journey" && state.won && state.level) openMap({ level: state.level, stars: state.stars });
-    else if (state.kind === "journey") reset({ kind: "journey", level: state.level ?? 1 });
-    else if (state.kind !== "classic") reset({ kind: state.kind });
-    else reset({ daily: state.daily, ch: state.challenge !== null ? { seed: state.seed, target: state.challenge } : null }); // a lost challenge replays the same pieces
+    else if (state.kind === "journey") afterBreak(() => reset({ kind: "journey", level: state.level ?? 1 }));
+    else if (state.kind !== "classic") afterBreak(() => reset({ kind: state.kind }));
+    else afterBreak(() => reset({ daily: state.daily, ch: state.challenge !== null ? { seed: state.seed, target: state.challenge } : null })); // a lost challenge replays the same pieces
     return;
   }
   if (!drag || e.pointerId !== drag.pointerId) return;
@@ -782,6 +827,12 @@ canvas.addEventListener("pointerup", (e) => {
         colorGrid[r]![c] = -1;
       }
       rings.push({ x: sx / list.length, y: sy / list.length, t: 0, max: cell * (2.2 + lines * 0.5), color: has("combo5") ? rainbow(0) : lines >= 2 ? COLORS.combo : "#ffffff", w: 2.5 + lines * 0.5 });
+      if (ownsSku("effect_pack") && !reduceMotion) {
+        for (const r of res.rowsCleared) beams.push({ x1: boardX, y1: boardY + (r + 0.5) * cell, x2: boardX + SIZE * cell, y2: boardY + (r + 0.5) * cell, t: 0 });
+        for (const c of res.colsCleared) beams.push({ x1: boardX + (c + 0.5) * cell, y1: boardY, x2: boardX + (c + 0.5) * cell, y2: boardY + SIZE * cell, t: 0 });
+        rings.push({ x: sx / list.length, y: sy / list.length, t: 0, max: cell * (3.4 + lines * 0.7), color: "#ffe9a8", w: 2 });
+        flash = Math.max(flash, 0.5);
+      }
       floaters.push({ x: sx / list.length, y: sy / list.length, text: `+${res.points + (perfect ? PERFECT_BONUS : 0)}`, sub: "", t: 0 });
 
       // Praise banner, scaled to how well that move went.
@@ -1135,12 +1186,16 @@ function render(dt: number): void {
   clears = clears.filter((cl) => cl.t < 1);
   praises = praises.filter((pr) => (pr.t += dt * 0.95) < 1);
   if (toasts[0] && (toasts[0].t += dt / 3.2) >= 1) toasts.shift();
+  // Ask about usage statistics once, at a quiet moment, and only where a collector exists.
+  if (lb.analytics && getConsent() === null && moves >= 3 && !state.over && !drag && !ui.consentOn && !ui.settingsOn && !ui.statsOn && !ui.lbOn && !ui.modesOn) { ui.consentOn = true; ui.consentT = 0; }
   if (ui.statsOn) ui.statsT = Math.min(1, ui.statsT + dt * 3);
   flash = Math.max(0, flash - dt * 2.6);
   jellyT += dt;
   if (!drag && !state.over && !ui.hintOn) idleT += dt; else idleT = 0;
   if (drag) drag.vx *= Math.max(0, 1 - dt * 9);
   for (const r of rings) r.t += dt * 2.4;
+  for (const b of beams) b.t += dt * 2.8;
+  beams = beams.filter((b) => b.t < 1);
   rings = rings.filter((r) => r.t < 1);
   scorePulse = Math.max(0, scorePulse - dt * 4);
   shake = Math.max(0, shake - dt * 3.5);
@@ -1275,6 +1330,17 @@ function render(dt: number): void {
     ctx.restore();
   }
 
+  for (const b of beams) {
+    const a = 1 - b.t;
+    const g = ctx.createLinearGradient(b.x1, b.y1, b.x2, b.y2);
+    g.addColorStop(Math.max(0, b.t - 0.25), "rgba(255,240,170,0)");
+    g.addColorStop(b.t, `rgba(255,245,200,${a})`);
+    g.addColorStop(Math.min(1, b.t + 0.25), "rgba(255,240,170,0)");
+    ctx.strokeStyle = g;
+    ctx.lineWidth = cell * 0.7 * a + 2;
+    ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(b.x1, b.y1); ctx.lineTo(b.x2, b.y2); ctx.stroke();
+  }
   if (!reduceMotion)
     for (const r of rings) {
       const e = 1 - Math.pow(1 - r.t, 3);
@@ -1347,7 +1413,7 @@ function render(dt: number): void {
     ctx.scale(pop, pop);
     const cw = Math.min(W - 48, 320);
     const dy = lbButtonShown() ? 56 : 0;
-    const extra = (canUndoOver() ? 52 : 0) + dy;
+    const extra = (canUndoOver() || adUndoOffered() ? 52 : 0) + dy;
     ctx.save();
     ctx.translate(0, 40 + extra / 2);
     sheet(cw, 370 + extra, "");
@@ -1410,7 +1476,7 @@ function render(dt: number): void {
     if (extra) {
       ctx.fillStyle = COLORS.combo;
       ctx.font = `900 15px ${ROUND}`;
-      ctx.fillText("\u21B6 Undo last move", 0, 238 + dy);
+      ctx.fillText(canUndoOver() ? "\u21B6 Undo last move" : "\u25B6 Watch an ad to undo", 0, 238 + dy);
     }
     ctx.restore();
   }
@@ -1428,6 +1494,7 @@ function drawScreens(dt: number): void {
   if (ui.statsOn) drawStats();
   if (ui.modesOn) drawModes(dtLast);
   if (ui.settingsOn) drawSettings(dtLast);
+  if (ui.consentOn) drawConsent(dtLast);
   if (ui.lbOn) drawLeaderboard(dtLast);
   if (ui.hintOn && !screen) drawHint(dtLast);
 }

@@ -41,10 +41,10 @@ analytics.ts). They are built to stay inert until configured, and they must neve
 - Ads go only through AdProvider. A reward is granted only on a `completed` outcome, and never in
   the daily, the weekly or a challenge (mayOfferRewarded). With no ad network on the page the null
   provider is used and the game plays exactly as before.
-- Entitlements: the client's copy is a cache for drawing the shop. A purchase counts only after a
-  server has verified it (not built yet), the same way a score counts only after replay.
+- Entitlements: the client's copy is a cache for drawing the shop. A purchase counts only after the
+  server has verified it with Paystack (prices are server-side), the same way a score counts only after replay.
 - Analytics: anonymous and self-hosted, with a closed list of event names, no third-party SDK and no
-  personal data. Off unless VITE_ANALYTICS_ENDPOINT is set.
+  personal data. Sends nothing until the player consents (one-time prompt, Settings toggle) and a collector exists.
 
 The one backend is the leaderboard (api/ routes and src/server/), kept deliberately small:
 - Anonymous. A random player id and a public nickname; no accounts and no personal data.
