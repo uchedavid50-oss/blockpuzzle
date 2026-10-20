@@ -1,6 +1,6 @@
 // Cache-first shell so the game opens instantly and works with no connection.
 // Bump CACHE on every release or browsers will serve the old build forever.
-const CACHE = "blockpuzzle-v21";
+const CACHE = "blockpuzzle-v22";
 
 self.addEventListener("install", (e) => {
   e.waitUntil(

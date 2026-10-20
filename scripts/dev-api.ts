@@ -17,6 +17,7 @@ import * as checkout from "../api/checkout";
 import * as purchase from "../api/purchase";
 import * as entitlements from "../api/entitlements";
 import * as webhook from "../api/paystack-webhook";
+import * as coinsApi from "../api/coins";
 
 // Local development: pretend to be Paystack (the fake is refused on Vercel) and use a known admin token.
 process.env.PAYSTACK_FAKE = "1";
@@ -26,7 +27,7 @@ const store = new MemoryStore();
 (globalThis as { __blockpuzzleStore?: MemoryStore }).__blockpuzzleStore = store;
 
 type Route = { GET?: (r: Request) => Response | Promise<Response>; POST?: (r: Request) => Response | Promise<Response> };
-const routes: Record<string, Route> = { "/api/health": health, "/api/submit": submit, "/api/rename": rename, "/api/board": board, "/api/streaks": streaks, "/api/collect": collectApi, "/api/stats": statsApi, "/api/checkout": checkout, "/api/purchase": purchase, "/api/entitlements": entitlements, "/api/paystack-webhook": webhook };
+const routes: Record<string, Route> = { "/api/health": health, "/api/submit": submit, "/api/rename": rename, "/api/board": board, "/api/streaks": streaks, "/api/collect": collectApi, "/api/stats": statsApi, "/api/checkout": checkout, "/api/purchase": purchase, "/api/entitlements": entitlements, "/api/paystack-webhook": webhook, "/api/coins": coinsApi };
 
 // A few fake players with real, verified games, so the board has something on it.
 const today = new Date().toISOString().slice(0, 10);

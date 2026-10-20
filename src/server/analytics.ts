@@ -2,7 +2,7 @@
 // HyperLogLogs, which cannot be read back), so no raw event and no per-player history is ever stored.
 // Retention is worked out from "which cohort day" and "which later day" counters alone.
 
-import { COUNTED_PROPS, EVENT_NAMES, type EventName } from "../events.js";
+import { COUNTED_PROPS, EVENT_NAMES, SUMMED_EVENTS, type EventName } from "../events.js";
 import { addDays, dayDiff } from "../streak.js";
 import type { Reply } from "./handlers.js";
 import { isDate, utcToday } from "./rules.js";
@@ -17,7 +17,9 @@ const SRC_RE = /^[a-zA-Z0-9_-]{1,32}$/;
 const KNOWN = new Set<string>(EVENT_NAMES);
 const reply = (status: number, body: Record<string, unknown>): Reply => ({ status, body });
 
-interface Clean { name: EventName; counted: string[] } // `counted` are the "prop:value" keys worth tallying
+interface Clean { name: EventName; counted: string[]; sum: number } // `counted` are the "prop:value" keys worth tallying
+const SUMMED = new Set<string>(SUMMED_EVENTS);
+const MAX_SUMMED = 100_000; // no single coin event is bigger than this; anything larger is not counted
 
 function cleanEvent(raw: unknown, nowMs: number): Clean | null {
   const e = raw as { name?: unknown; t?: unknown; props?: unknown } | null;
@@ -34,7 +36,9 @@ function cleanEvent(raw: unknown, nowMs: number): Clean | null {
       if (typeof v === "string" && COUNTED_PROPS[k]?.includes(v)) counted.push(`${k}:${v}`);
     }
   }
-  return { name: e.name as EventName, counted };
+  const coins = (e.props as { coins?: unknown } | undefined)?.coins;
+  const sum = SUMMED.has(e.name) && typeof coins === "number" && Number.isInteger(coins) && coins > 0 && coins <= MAX_SUMMED ? coins : 0;
+  return { name: e.name as EventName, counted, sum };
 }
 
 /** Accepts one batch of events from a browser. Returns 400 for anything malformed, never partially counts it. */
@@ -63,6 +67,7 @@ export async function collect(store: Store, body: unknown, now = new Date()): Pr
   for (const c of cleaned) {
     tally.set(`an:ev:${date}:${c.name}`, (tally.get(`an:ev:${date}:${c.name}`) ?? 0) + 1);
     for (const k of c.counted) tally.set(`an:ev:${date}:${c.name}:${k}`, (tally.get(`an:ev:${date}:${c.name}:${k}`) ?? 0) + 1);
+    if (c.sum > 0) tally.set(`an:sum:${date}:${c.name}`, (tally.get(`an:sum:${date}:${c.name}`) ?? 0) + c.sum);
   }
   for (const [key, n] of tally) await store.incr(key, n);
 
@@ -79,11 +84,12 @@ export async function collect(store: Store, body: unknown, now = new Date()): Pr
   if (cleaned.some((c) => c.name === "session_start")) {
     for (const k of [`an:dau:${date}`, `an:coh:${firstSeen}`, `an:ret:${firstSeen}:${age}`]) await store.expire(k, KEEP);
     for (const name of cleaned.map((c) => c.name)) await store.expire(`an:ev:${date}:${name}`, KEEP);
+    for (const name of SUMMED_EVENTS) await store.expire(`an:sum:${date}:${name}`, KEEP);
   }
   return reply(200, { ok: true });
 }
 
-export interface DayStats { date: string; dau: number; events: Record<string, number>; byProp: Record<string, number> }
+export interface DayStats { date: string; dau: number; events: Record<string, number>; byProp: Record<string, number>; sums: Record<string, number> }
 export interface Cohort { firstSeen: string; size: number; d1: number | null; d7: number | null; d30: number | null }
 
 const pct = (n: number, d: number): number | null => (d > 0 ? Math.round((n / d) * 1000) / 10 : null);
@@ -110,7 +116,9 @@ export async function getStats(store: Store, now = new Date(), days = 14): Promi
       const l = labels[i]!;
       if (l.label === null) events[l.name] = n; else byProp[l.label] = n;
     });
-    perDay.push({ date, dau: await store.pfcount(`an:dau:${date}`), events, byProp });
+    const sums: Record<string, number> = {};
+    (await store.mcount(SUMMED_EVENTS.map((n) => `an:sum:${date}:${n}`))).forEach((n, i) => { if (n) sums[SUMMED_EVENTS[i]!] = n; });
+    perDay.push({ date, dau: await store.pfcount(`an:dau:${date}`), events, byProp, sums });
   }
   const cohorts: Cohort[] = [];
   for (const firstSeen of dayList) {

@@ -19,7 +19,8 @@ no rotation, no timer. Never reference Tetris in code, assets or naming.
 - Every random game is seeded, so a shared link replays the exact same pieces.
 
 ## Structure
-- Pure, tested modules (no DOM): board, rng, streak, share, meta, challenge, journey, weekly, solver, map.
+- Pure, tested modules (no DOM): board, rng, streak, share, meta, challenge, journey, weekly, solver, map,
+  economy, wallet.
 - main.ts holds the game loop, board rendering and input. gfx.ts has drawing primitives and layout
   (including the shared candy look: sheets, ribbons, candy buttons, bubbly lettering),
   overlays.ts the screens drawn over the game, mapView.ts the journey map (its path, worlds and
@@ -31,8 +32,8 @@ no rotation, no timer. Never reference Tetris in code, assets or naming.
   `npm run validate` checks journey, weekly goals and region shapes against the bot.
 
 ## Scope
-No coin or booster economies, no obstacle or gem cells, and no adaptive difficulty. Do not add
-them unless I ask.
+No booster economies, no obstacle or gem cells, and no adaptive difficulty. Do not add them unless
+I ask. A coin economy exists because I asked for it (below).
 
 Monetisation and measurement exist because I asked for them (src/ads.ts, entitlements.ts,
 analytics.ts). They are built to stay inert until configured, and they must never touch the rules:
@@ -45,6 +46,21 @@ analytics.ts). They are built to stay inert until configured, and they must neve
   server has verified it with Paystack (prices are server-side), the same way a score counts only after replay.
 - Analytics: anonymous and self-hosted, with a closed list of event names, no third-party SDK and no
   personal data. Sends nothing until the player consents (one-time prompt, Settings toggle) and a collector exists.
+
+Coins (src/economy.ts numbers, src/wallet.ts rules, src/coins.ts storage, src/server/coins.ts ledger):
+- Every reward amount and price lives in economy.ts. Never hard-code one anywhere else.
+- Every reward has a grant id and is paid at most once (wallet.ts `earn`). New rewards need a new,
+  stable id: a daily one includes the date; anything per level or per milestone includes that key.
+- A purchase is one new wallet value (coins out, item in) saved in one write. The balance never goes
+  negative; a repeat tap on the same item within DOUBLE_TAP_MS is refused.
+- Coins never buy anything in the daily, the weekly or a challenge, and never touch the piece
+  generator, the board, scoring or replay verification. Shuffle/reroll was left out on purpose: it
+  would draw pieces outside the seeded sequence and break challenge links and verification.
+- Coins never buy anything sold for money (the Paystack packs and items stay money-only).
+- Earned coins live on the device; editing them only cheats that player. Coins bought with money
+  are credited on the server only after Paystack verification, once per payment reference, and a
+  device collects them with an atomic claim (retry-safe claim id). Never credit coins from the client.
+- Ad coins only after `claimReward` returns true (coins.ts `watchAdForCoins`), capped per day.
 
 The one backend is the leaderboard (api/ routes and src/server/), kept deliberately small:
 - Anonymous. A random player id and a public nickname; no accounts and no personal data.

@@ -68,6 +68,13 @@ Everything here is off until configured, and none of it can change the rules or 
   uses Google's test mode. A rewarded "watch an ad to undo" appears on game over (never in the daily, weekly
   or a challenge) and an interstitial may precede "Play again" (every 3 runs, 5 minute cooldown, never for
   owners of "No interruptions"). If the script is blocked, nothing is shown.
+- **Coins**: earned by playing (a starter gift, a daily bonus, today's daily, beating par, the weekly,
+  journey stars and best-score milestones), each paid once. With ads on, a rewarded ad gives coins, at most
+  five a day, only after a completed view. Coins buy saved undos (never usable in the daily, weekly or a
+  challenge) and two coin-only themes, from the coin counter under the trophy or Settings > Coins. With the
+  shop configured, coin packs are sold through the same verified Paystack checkout: the server credits them
+  once per payment and the device collects them with a retry-safe claim. Every reward and price is in
+  `src/economy.ts`.
 
 Test the shop locally with `npm run dev:api` (a fake Paystack that is refused on Vercel).
 

@@ -4,6 +4,8 @@
 import { haptic } from "./haptics";
 import { inSeason, type MonthDay } from "./meta";
 import { ownsSku } from "./ownership.js";
+import { ownsCoinItem } from "./coins.js";
+import { isCoinItem } from "./economy.js";
 import { sfx } from "./sound";
 import { applyPlay, currentStreak, type StreakRec } from "./streak";
 
@@ -162,6 +164,9 @@ export const THEMES: { name: string; colors: string[]; req?: string; season?: { 
   { name: "Lime Fizz", req: "pack:citrus", colors: ["#c6ff00", "#00e676", "#1de9b6", "#00e5ff", "#ffea00", "#ffab00", "#ff6d00", "#ff4081"] },
   { name: "Orange Grove", req: "pack:citrus", colors: ["#ff9a00", "#ffb703", "#fb8500", "#e63946", "#2a9d8f", "#8ecae6", "#219ebc", "#a8dadc"] },
   { name: "Tangerine Pop", req: "pack:citrus", colors: ["#ff7b00", "#ff9500", "#ffb700", "#ff006e", "#8338ec", "#3a86ff", "#06d6a0", "#fb5607"] },
+  // Coin shop. Cosmetic only, bought with coins (economy.ts).
+  { name: "Mint", req: "coin:theme_mint", colors: ["#3ddc97", "#2ec4b6", "#7ae7c7", "#46b1c9", "#a8e6cf", "#56cfe1", "#80ed99", "#4ea8de"] },
+  { name: "Coral", req: "coin:theme_coral", colors: ["#ff6f61", "#ff9a76", "#ffc4a3", "#f25f5c", "#ffb4a2", "#e5989b", "#f7a072", "#ef476f"] },
   // Limited-time themes: usable only during their window each year.
   { name: "Pumpkin", season: { from: [10, 15], to: [11, 3], label: "Oct 15 \u2013 Nov 3" }, colors: ["#ff7a1a", "#ffb347", "#7bd16f", "#b57aff", "#ff5a3c", "#ffd23f", "#4fc3a1", "#e8590c"] },
   { name: "Frost", season: { from: [12, 1], to: [1, 6], label: "Dec 1 \u2013 Jan 6" }, colors: ["#8fd3ff", "#d6f0ff", "#5aa9ff", "#b8c6ff", "#7ee8e0", "#e8f7ff", "#9bb7ff", "#6fe0ff"] },
@@ -179,6 +184,7 @@ export const themeUnlocked = (i: number): boolean => {
   if (season) return inSeason(new Date(), season.from, season.to);
   if (req === "pack:dusk") return ownsSku("theme_pack_dusk");
   if (req === "pack:citrus") return ownsSku("theme_pack_citrus");
+  if (req?.startsWith("coin:")) { const id = req.slice(5); return isCoinItem(id) && ownsCoinItem(id); }
   return !req || (req === "collection" ? collectionTiles() >= COLLECTION_SIZE : has(req));
 };
 /** Next theme you have unlocked, wrapping around. */

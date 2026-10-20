@@ -202,6 +202,24 @@ export function star(x: number, y: number, r: number): void {
   ctx.closePath();
 }
 
+/** A gold coin of radius r centred on (x, y), in the same glossy candy look as the buttons. */
+export function coin(x: number, y: number, r: number): void {
+  ctx.save();
+  const g = ctx.createLinearGradient(0, y - r, 0, y + r);
+  g.addColorStop(0, "#fff09a");
+  g.addColorStop(1, "#ffb81f");
+  ctx.fillStyle = "#a86400";
+  ctx.beginPath(); ctx.arc(x, y + r * 0.12, r, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = "rgba(168,100,0,0.55)";
+  ctx.lineWidth = Math.max(1, r * 0.16);
+  ctx.beginPath(); ctx.arc(x, y, r * 0.62, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,0.75)";
+  ctx.beginPath(); ctx.ellipse(x - r * 0.3, y - r * 0.38, r * 0.28, r * 0.14, -0.6, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
 /** A small sunset scene, drawn in `size` x `size` at (x, y). The collection reveals it tile by tile. */
 export function paintScene(x: number, y: number, size: number): void {
   const sky = ctx.createLinearGradient(0, y, 0, y + size);

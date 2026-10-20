@@ -10,7 +10,7 @@
 // the correct state until an AdSense account is approved.
 
 /** Where in the game an ad was asked for. Used for frequency rules and for analytics. */
-export type Placement = "classic_undo" | "journey_retry" | "between_runs";
+export type Placement = "classic_undo" | "journey_retry" | "between_runs" | "coin_reward";
 
 export type AdOutcome =
   | { kind: "completed" }

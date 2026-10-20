@@ -2,7 +2,11 @@
 // invitation and the first-run hint. Rendering only. Their open/closed state lives in `ui`, which the
 // input handlers in main.ts read and write.
 
-import { ctx, W, H, dpr, cell, boardY, COLORS, ROUND, BRAND, reduceMotion, easeOutBack, setReduceMotion, star, paintScene, dim, sheet, candyButton, bubbleText, roundButton } from "./gfx";
+import { ctx, W, H, dpr, cell, boardY, COLORS, ROUND, BRAND, reduceMotion, easeOutBack, setReduceMotion, star, paintScene, dim, sheet, candyButton, bubbleText, roundButton, coin } from "./gfx";
+import { COIN_ITEMS, COIN_PACKS, ECONOMY, coinItem, isCoinItem } from "./economy";
+import { adsLeftToday, balance, ownsCoinItem, purchase, savedUndos, wallet, watchAdForCoins } from "./coins";
+import { provider } from "./ads";
+import { adsReady } from "./adLoader";
 import { isMuted, toggleMute } from "./sound";
 import { lb, type BoardData, type StreakData } from "./leaderboardClient";
 import { setSetting, settings } from "./settings";
@@ -57,9 +61,11 @@ export const ui = {
   consentOn: false,
   consentT: 0,
   consentPress: null as { x: number; y: number } | null,
-  settingsPage: "main" as "main" | "themes" | "shop",
+  settingsPage: "main" as "main" | "themes" | "shop" | "coins",
   shopNote: "",
   shopBusy: false,
+  coinNote: "",
+  coinBusy: false, // a rewarded ad is in flight: further taps on it are ignored
   // leaderboard
   lbOn: false,
   lbT: 0,
@@ -641,7 +647,18 @@ const TOGGLES: { key: ToggleKey; name: string; sub: string }[] = [
 const toggles = (): typeof TOGGLES => TOGGLES.filter((t) => t.key !== "usage" || lb.analytics);
 const toggleOn = (k: ToggleKey): boolean => (k === "sound" ? !isMuted() : k === "usage" ? getConsent() === "yes" : settings[k]);
 const currency = (): "NGN" | "USD" => (lb.currencies.includes("NGN") ? "NGN" : "USD");
-const btnY = 62; // the Themes / Shop buttons on the main page
+const btnY = 62; // the Themes / Coins / Shop buttons on the main page
+/** The page buttons on the main settings page, spread evenly across the card. The paid shop only when payments are set up. */
+function navButtons(cw: number): { page: "themes" | "coins" | "shop"; label: string; kind: "violet" | "gold" | "pink"; x: number; w: number }[] {
+  const list = [
+    { page: "themes" as const, label: "Themes", kind: "violet" as const },
+    { page: "coins" as const, label: "Coins", kind: "gold" as const },
+    ...(lb.shop ? [{ page: "shop" as const, label: "Shop", kind: "pink" as const }] : []),
+  ];
+  const step = (cw - 32) / list.length;
+  return list.map((b, i) => ({ ...b, x: -cw / 2 + 16 + step * (i + 0.5), w: Math.min(160, step - 10) }));
+}
+const coinRowY = (i: number): number => -240 + i * 64; // rows on the coin page: 58 tall
 const shopRowY = (i: number): number => -236 + i * 74;
 const toggleY = (i: number): number => -250 + i * 56;
 const themeCell = (i: number, cw: number): { x: number; y: number; w: number; h: number } => {
@@ -655,6 +672,7 @@ function requirement(i: number): string {
   if (t.req === "collection") return "Finish the collection";
   if (t.req === "pack:dusk") return "Dusk pack (Shop)";
   if (t.req === "pack:citrus") return "Citrus pack (Shop)";
+  if (t.req?.startsWith("coin:")) { const id = t.req.slice(5); return isCoinItem(id) ? `${coinItem(id).cost} coins` : "Coin shop"; }
   const b = BADGES.find((x) => x.id === t.req);
   return b ? `Earn ${b.name}` : "Locked";
 }
@@ -671,7 +689,7 @@ export function drawSettings(dt: number): void {
   ctx.scale(l.k, l.k);
   const cw = l.cw;
   const page = ui.settingsPage;
-  sheet(cw, SET_H, page === "themes" ? "Themes" : page === "shop" ? "Shop" : "Settings");
+  sheet(cw, SET_H, page === "themes" ? "Themes" : page === "shop" ? "Shop" : page === "coins" ? "Coins" : "Settings");
 
   ctx.textBaseline = "middle";
   ctx.textAlign = "center";
@@ -699,8 +717,7 @@ export function drawSettings(dt: number): void {
       ctx.fill();
     });
 
-    candyButton(lb.shop ? -88 : 0, btnY, 160, 40, "Themes", "violet", 0, 16);
-    if (lb.shop) candyButton(88, btnY, 160, 40, "Shop", "gold", 0, 16);
+    for (const b of navButtons(cw)) candyButton(b.x, btnY, b.w, 40, b.label, b.kind, 0, 16);
     ctx.textAlign = "center";
     ctx.fillStyle = COLORS.dim;
     ctx.font = `500 12px ${ROUND}`;
@@ -740,12 +757,159 @@ export function drawSettings(dt: number): void {
     ctx.fillStyle = COLORS.dim;
     ctx.font = `500 12px ${ROUND}`;
     ctx.fillText(ui.settingsNote || "Tap a theme to wear it. Locked ones show how to earn them.", 0, 262, cw - 40);
+  } else if (page === "coins") {
+    drawCoinShop(cw);
   } else {
     drawShop(cw);
   }
 
   candyButton(0, 296, 168, 40, page === "main" ? "Done" : "Back", "violet", 0, 16);
   ctx.restore();
+}
+
+/** Opens the settings sheet straight onto the coin shop (from the coin counter in the game's header). */
+export function openCoinShop(): void {
+  ui.settingsOn = true; ui.settingsT = 0; ui.settingsPage = "coins"; ui.coinNote = ""; ui.settingsNote = ""; ui.shopNote = "";
+}
+
+/** Coin packs for money appear only when this deployment can take payments. */
+const coinPacksShown = (): boolean => lb.shop;
+
+function drawCoinShop(cw: number): void {
+  ctx.textBaseline = "middle";
+  const left = -cw / 2 + 16;
+  const rowW = cw - 32;
+  const row = (y: number, tint = "rgba(138,77,255,0.07)"): void => {
+    ctx.fillStyle = tint;
+    ctx.beginPath();
+    ctx.roundRect(left, y, rowW, 58, 14);
+    ctx.fill();
+  };
+  const text = (s: string, y: number, size: number, weight: number, color: string, maxW = cw - 150): void => {
+    ctx.textAlign = "left";
+    ctx.fillStyle = color;
+    ctx.font = `${weight} ${size}px ${ROUND}`;
+    ctx.fillText(s, left + 14, y, maxW);
+  };
+
+  // Row 0: the balance, and a rewarded ad for coins when an ad network is on the page.
+  let y = coinRowY(0);
+  row(y, "rgba(255,184,31,0.16)");
+  coin(left + 26, y + 29, 14);
+  ctx.textAlign = "left";
+  ctx.fillStyle = COLORS.text;
+  ctx.font = `900 24px ${ROUND}`;
+  ctx.fillText(balance().toLocaleString("en-US"), left + 48, y + 24, cw - 190);
+  ctx.fillStyle = COLORS.dim;
+  ctx.font = `600 11px ${ROUND}`;
+  const undos = savedUndos();
+  ctx.fillText(undos > 0 ? `coins · ${undos} saved undo${undos === 1 ? "" : "s"}` : "coins", left + 48, y + 45, cw - 190);
+  if (adsReady()) {
+    const leftToday = adsLeftToday(today());
+    if (ui.coinBusy) candyButton(cw / 2 - 66, y + 29, 92, 36, "…", "green", 0, 14);
+    else if (leftToday > 0) candyButton(cw / 2 - 66, y + 29, 92, 36, `▶ +${ECONOMY.ad.coins}`, "green", 0, 14);
+    else {
+      ctx.textAlign = "right";
+      ctx.fillStyle = COLORS.dim;
+      ctx.font = `600 11px ${ROUND}`;
+      ctx.fillText("More ads tomorrow", cw / 2 - 26, y + 29, 110);
+    }
+  }
+
+  // Items bought with coins.
+  COIN_ITEMS.forEach((it, i) => {
+    y = coinRowY(1 + i);
+    row(y);
+    text(it.name, y + 20, 15, 800, COLORS.text);
+    text(it.blurb, y + 40, 11, 500, COLORS.dim);
+    const owned = it.kind === "once" && ownsCoinItem(it.id);
+    if (owned) candyButton(cw / 2 - 66, y + 29, 92, 36, "Owned", "green", 0, 14);
+    else candyButton(cw / 2 - 66, y + 29, 92, 36, `${it.cost} coins`, balance() >= it.cost ? "gold" : "violet", 0, 13);
+  });
+
+  // Coin packs for money, through the same verified Paystack checkout as the rest of the shop.
+  if (coinPacksShown()) {
+    COIN_PACKS.forEach((p, i) => {
+      y = coinRowY(1 + COIN_ITEMS.length + i);
+      row(y, "rgba(255,79,160,0.08)");
+      coin(left + 24, y + 29, 11);
+      ctx.textAlign = "left";
+      ctx.fillStyle = COLORS.text;
+      ctx.font = `800 15px ${ROUND}`;
+      ctx.fillText(p.name, left + 42, y + 20, cw - 170);
+      ctx.fillStyle = COLORS.dim;
+      ctx.font = `500 11px ${ROUND}`;
+      ctx.fillText("Added once your payment clears.", left + 42, y + 40, cw - 170);
+      candyButton(cw / 2 - 66, y + 29, 92, 36, formatPrice(p.price, currency()), "pink", 0, 14);
+    });
+  }
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = ui.coinNote ? COLORS.text : COLORS.dim;
+  ctx.font = `${ui.coinNote ? 700 : 500} 12px ${ROUND}`;
+  ctx.fillText(ui.coinNote || "Tap a price to buy. Coins never buy an edge in ranked modes.", 0, 166, cw - 32);
+  ctx.fillStyle = COLORS.dim;
+  ctx.font = `500 11px ${ROUND}`;
+  ctx.fillText("Earn coins with the daily bonus, today’s daily, the weekly,", 0, 196, cw - 32);
+  ctx.fillText("journey stars and score milestones.", 0, 213, cw - 32);
+  if (!wallet.saved) {
+    ctx.fillStyle = COLORS.combo;
+    ctx.font = `700 11px ${ROUND}`;
+    ctx.fillText("This browser is not saving data, so coins last until you close it.", 0, 240, cw - 24);
+  }
+}
+
+/** A tap on the coin page, in card coordinates. Every outcome leaves a message in `ui.coinNote`. */
+function coinTap(lx: number, ly: number, cw: number): void {
+  const onButton = lx > cw / 2 - 118;
+  const inRow = (i: number): boolean => ly >= coinRowY(i) && ly <= coinRowY(i) + 58;
+
+  if (inRow(0) && onButton && adsReady()) {
+    if (ui.coinBusy) return; // one ad at a time, however many taps
+    if (adsLeftToday(today()) <= 0) { ui.coinNote = "That’s all the ad rewards for today."; return; }
+    ui.coinBusy = true;
+    ui.coinNote = "Loading the ad…";
+    haptics.tick();
+    // Coins only on a confirmed, completed view (see coins.ts). Anything else pays nothing.
+    void watchAdForCoins(provider(), today()).then((r) => {
+      ui.coinBusy = false;
+      ui.coinNote = r.kind === "paid" ? `+${r.coins} coins!`
+        : r.kind === "cap" ? "That’s all the ad rewards for today."
+        : r.kind === "busy" ? "Loading the ad…"
+        : "The ad didn’t finish, so no coins this time.";
+    });
+    return;
+  }
+
+  for (let i = 0; i < COIN_ITEMS.length; i++) {
+    if (!inRow(1 + i) || !onButton) continue;
+    const it = COIN_ITEMS[i]!;
+    const r = purchase(it.id);
+    if (r.ok) {
+      haptics.tick();
+      if (it.kind === "once") {
+        const ti = THEMES.findIndex((t) => t.req === `coin:${it.id}`);
+        if (ti >= 0) applyTheme(ti);
+        ui.coinNote = `${it.name} unlocked and applied.`;
+      } else ui.coinNote = `+${it.undos ?? 0} saved undos. You have ${savedUndos()}.`;
+      if (!wallet.saved) ui.coinNote += " (Not saved on this browser.)";
+    } else if (r.reason === "insufficient") ui.coinNote = `You need ${r.need ?? it.cost} more coins for that.`;
+    else if (r.reason === "owned") ui.coinNote = "You already own that.";
+    else if (r.reason === "full") ui.coinNote = "You’re holding as many saved undos as you can.";
+    else if (r.reason === "unknown") ui.coinNote = "That item isn’t available.";
+    // "repeat": a second tap on the same item a moment later is the same tap, so nothing changes.
+    return;
+  }
+
+  if (coinPacksShown()) {
+    for (let i = 0; i < COIN_PACKS.length; i++) {
+      if (!inRow(1 + COIN_ITEMS.length + i) || !onButton || ui.shopBusy) continue;
+      ui.shopBusy = true;
+      ui.coinNote = "Opening checkout…";
+      void beginCheckout(COIN_PACKS[i]!.id, currency()).then((r) => { ui.shopBusy = false; ui.coinNote = r.ok ? "Opening checkout…" : r.message; });
+      return;
+    }
+  }
 }
 
 function drawShop(cw: number): void {
@@ -792,12 +956,17 @@ export function settingsTap(lx: number, ly: number): boolean {
   const page = ui.settingsPage;
   if (ly >= 274 && ly <= 320 && Math.abs(lx) <= 90) {
     if (page === "main") return true;
-    ui.settingsPage = "main"; ui.settingsNote = ""; ui.shopNote = ""; return false;
+    ui.settingsPage = "main"; ui.settingsNote = ""; ui.shopNote = ""; ui.coinNote = ""; return false;
   }
   if (page === "main") {
     if (ly >= btnY - 20 && ly <= btnY + 20) {
-      if (lb.shop && lx > 8) { ui.settingsPage = "shop"; track("shop_viewed"); void syncEntitlements(); haptics.tick(); }
-      else if (lx < (lb.shop ? -8 : 80) && lx > (lb.shop ? -168 : -80)) { ui.settingsPage = "themes"; haptics.tick(); }
+      const b = navButtons(cw).find((n) => Math.abs(lx - n.x) <= n.w / 2);
+      if (b) {
+        ui.settingsPage = b.page;
+        ui.coinNote = "";
+        if (b.page === "shop") { track("shop_viewed"); void syncEntitlements(); }
+        haptics.tick();
+      }
       return false;
     }
     const list = toggles();
@@ -824,6 +993,8 @@ export function settingsTap(lx: number, ly: number): boolean {
         return false;
       }
     }
+  } else if (page === "coins") {
+    coinTap(lx, ly, cw);
   } else {
     const items = forSale(ownership.ent);
     for (let i = 0; i < items.length; i++) {

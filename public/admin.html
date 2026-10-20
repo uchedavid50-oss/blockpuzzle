@@ -42,6 +42,7 @@
   <h2>Retention by sign-up day</h2><div class="scroll"><table id="cohorts"></table></div>
   <h2>Where players came from</h2><div class="scroll"><table id="sources"></table></div>
   <h2>Ads and purchases (14 days)</h2><div class="scroll"><table id="money"></table></div>
+  <h2>Coins (14 days)</h2><div class="scroll"><table id="coins"></table></div>
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -78,6 +79,18 @@ async function load(token) {
     ["Shop opened", sum(days, (r) => ev(r, "shop_viewed"))], ["Checkouts started", sum(days, (r) => ev(r, "purchase_started"))],
     ["Purchases completed", sum(days, (r) => ev(r, "purchase_completed"))],
     ["Checkout → purchase", pct(sum(days, (r) => ev(r, "purchase_completed")), sum(days, (r) => ev(r, "purchase_started")))]]);
+  // Coins: totals are summed by the server; the rest are counts. Lists match src/economy.ts.
+  const total = (n) => sum(days, (r) => (r.sums && r.sums[n]) || 0);
+  const by = (k) => sum(days, (r) => (r.byProp && r.byProp[k]) || 0);
+  const SOURCES = ["starter", "daily_bonus", "daily_challenge", "daily_par", "weekly", "journey", "milestone", "ad", "purchase"];
+  const ITEMS = ["undo3", "theme_mint", "theme_coral"];
+  const PACKS = ["coins_small", "coins_large"];
+  table($("coins"), ["Measure", "Count"], [
+    ["Coins earned", total("coins_earned")], ["Coins spent", total("coins_spent")],
+    ["Ads watched for coins", by("ad_completed.placement.coin_reward")],
+    ...SOURCES.map((s) => ["Rewards paid · " + s, by("coins_earned.source." + s)]),
+    ...ITEMS.map((i) => ["Bought with coins · " + i, by("coins_spent.item." + i)]),
+    ...PACKS.map((p) => ["Coin packs sold · " + p, by("purchase_completed.sku." + p)])]);
   $("out").hidden = false;
 }
 $("f").addEventListener("submit", (e) => {

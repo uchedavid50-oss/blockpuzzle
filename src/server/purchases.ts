@@ -3,6 +3,8 @@
 // match what the server asked for. Granting is idempotent, so a repeated redirect or webhook is harmless.
 
 import { CATALOGUE, NOTHING, grant, isSku, owns, parse, type Entitlements, type Sku } from "../entitlements.js";
+import { packFor } from "../economy.js";
+import { creditPack, unclaimedCoins } from "./coins.js";
 import type { Reply } from "./handlers.js";
 import { type Paystack, allowedCurrencies } from "./paystack.js";
 import { isPlayerId } from "./rules.js";
@@ -13,7 +15,8 @@ const reply = (status: number, body: Record<string, unknown>): Reply => ({ statu
 const REF_RE = /^bp_[a-f0-9]{24}$/;
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/;
 
-interface Pending { player: string; sku: Sku; amount: number; currency: string }
+/** `sku` is an entitlement (owned forever) or a coin pack (credited as coins, can be bought again). */
+interface Pending { player: string; sku: string; amount: number; currency: string }
 
 export async function entitlementsOf(store: Store, player: string): Promise<Entitlements> {
   try { return parse(JSON.parse((await store.get(`ent:${player}`)) ?? "null")); } catch { return NOTHING; }
@@ -21,7 +24,7 @@ export async function entitlementsOf(store: Store, player: string): Promise<Enti
 
 export async function getEntitlements(store: Store, query: { player?: unknown }): Promise<Reply> {
   if (!isPlayerId(query.player)) return reply(400, { error: "bad player" });
-  return reply(200, { owned: (await entitlementsOf(store, query.player)).owned });
+  return reply(200, { owned: (await entitlementsOf(store, query.player)).owned, coins: await unclaimedCoins(store, query.player) });
 }
 
 const randomRef = (): string => {
@@ -34,14 +37,16 @@ const randomRef = (): string => {
 export async function startCheckout(store: Store, ps: Paystack, body: unknown, origin: string, env: Record<string, string | undefined> = process.env): Promise<Reply> {
   const b = (body ?? {}) as { player?: unknown; sku?: unknown; currency?: unknown; email?: unknown };
   if (!isPlayerId(b.player)) return reply(400, { error: "bad player" });
-  if (typeof b.sku !== "string" || !isSku(b.sku)) return reply(400, { error: "bad item" });
+  const pack = packFor(b.sku);
+  if (typeof b.sku !== "string" || (!isSku(b.sku) && !pack)) return reply(400, { error: "bad item" });
   const currency = typeof b.currency === "string" ? b.currency : "NGN";
   if (!allowedCurrencies(env).includes(currency)) return reply(400, { error: "currency not available" });
-  const catalogue = CATALOGUE.find((i) => i.sku === b.sku)!;
-  if (owns(await entitlementsOf(store, b.player), b.sku)) return reply(409, { error: "already owned" });
+  const price = pack ? pack.price : CATALOGUE.find((i) => i.sku === b.sku)!.price;
+  // Coin packs can be bought again and again; everything else only once.
+  if (!pack && owns(await entitlementsOf(store, b.player), b.sku as Sku)) return reply(409, { error: "already owned" });
   if (b.email !== undefined && (typeof b.email !== "string" || !EMAIL_RE.test(b.email))) return reply(400, { error: "bad email" });
 
-  const amount = currency === "USD" ? catalogue.price.usd : catalogue.price.ngn; // the browser never names an amount
+  const amount = currency === "USD" ? price.usd : price.ngn; // the browser never names an amount
   const reference = randomRef();
   const email = typeof b.email === "string" ? b.email : `${b.player}@players.blockpuzzle.invalid`;
   const pending: Pending = { player: b.player, sku: b.sku, amount, currency };
@@ -71,6 +76,14 @@ export async function confirmPurchase(store: Store, ps: Paystack, reference: unk
   if (v.reference !== reference || v.amount !== pending.amount || v.currency !== pending.currency || v.metadata?.player !== pending.player || v.metadata?.sku !== pending.sku)
     return reply(409, { error: "payment does not match the order" });
 
+  const pack = packFor(pending.sku);
+  if (pack) {
+    // Credited once per payment, however many times the return page and the webhook confirm it.
+    await creditPack(store, pending.player, reference, pack.coins);
+    await store.set(`done:${reference}`, JSON.stringify({ player: pending.player, sku: pending.sku }));
+    return reply(200, { ok: true, sku: pending.sku, coins: pack.coins, owned: (await entitlementsOf(store, pending.player)).owned });
+  }
+  if (!isSku(pending.sku)) return reply(409, { error: "unknown item" });
   const ent = grant(await entitlementsOf(store, pending.player), pending.sku);
   await store.set(`ent:${pending.player}`, JSON.stringify(ent));
   if (owns(ent, "supporter_bundle")) await store.hset("supporters", pending.player, "1");

@@ -10,11 +10,14 @@ import { blankRun, recordMove, weeklyDone, weeklyFailed, weeklyFor, weeklySeed, 
 import { haptic, haptics } from "./haptics";
 import { isMuted, sfx, soundState, toggleMute, unlock } from "./sound";
 
-import { canvas, ctx, W, H, dpr, cell, boardX, boardY, trayY, trayCell, COLORS, FONT, ROUND, reduceMotion, layoutView, setReduceMotion, block, emptyCell, drawShape, drawCentered, easeOutBack, label, pill, mix, candyBackdrop, bubbleText, candyButton, dim, ribbon, sheet } from "./gfx";
+import { canvas, ctx, W, H, dpr, cell, boardX, boardY, trayY, trayCell, COLORS, FONT, ROUND, reduceMotion, layoutView, setReduceMotion, block, emptyCell, drawShape, drawCentered, easeOutBack, label, pill, mix, candyBackdrop, bubbleText, candyButton, dim, ribbon, sheet, coin } from "./gfx";
 import { worldOf } from "./map";
 import { BADGES, PALETTE, THEMES, badgesSeen, bumpStreak, checkBadges, cycleTheme, has, markBadgesSeen, markThemeShown, perkUndos, playedDailyToday, saveStats, stats, streakNow, themeIdx, themeShownAt, today, toasts, unlocked } from "./progress";
 import { clearOfficial, markWeeklyCompleted, officialResult, parFor, postedResult, readJourney, saveOfficial, savePosted, weeklyCompleted, writeJourney } from "./records";
-import { CARD_H, HINT_KEY, MODES_H, PRAISE, TABS, archiveDates, badgeCell, chHit, drawChallengeIntro, drawHint, drawLeaderboard, drawModes, drawPraise, drawSettings, consentLayout, consentTap, drawConsent, drawStats, drawToast, lbLayout, lbTap, modesLayout, modesRow, settingsLayout, settingsTap, statsLayout, tabRect, ui, type Praise } from "./overlays";
+import { CARD_H, HINT_KEY, MODES_H, PRAISE, TABS, archiveDates, badgeCell, chHit, drawChallengeIntro, drawHint, drawLeaderboard, drawModes, drawPraise, drawSettings, consentLayout, consentTap, drawConsent, drawStats, drawToast, lbLayout, lbTap, modesLayout, modesRow, openCoinShop, settingsLayout, settingsTap, statsLayout, tabRect, ui, type Praise } from "./overlays";
+import { award, awardAll, balance, savedUndos, startupRewards, takeSavedUndo } from "./coins";
+import { ECONOMY, isPack } from "./economy";
+import { journeyStarsOwed, milestonesFor } from "./wallet";
 import { askName } from "./nameDialog";
 import { checkLeaderboard, fetchBoard, fetchStreaks, getPlayer, lb, postDaily, savePlayerName } from "./leaderboardClient";
 import { settings } from "./settings";
@@ -240,11 +243,20 @@ const muteCenter = (): [number, number] => [W - 26, 77];
 interface Snapshot { grid: Grid; tray: (Shape | null)[]; score: number; combo: number; trays: number; colors: number[][]; moves: number; lines: number; wk: WeeklyRun | null; moveLog: MoveTuple[] }
 let snap: Snapshot | null = null;
 
-const canUndo = (): boolean => !!snap && state.undoLeft > 0 && !state.over && !drag;
-const canUndoOver = (): boolean => !!snap && state.undoLeft > 0 && state.over && !state.won;
+/**
+ * Saved undos (bought with coins) top up a game's own undos once those are spent. Only where a rewarded
+ * ad undo is allowed (never the daily, the weekly or a challenge), and not in zen, which has plenty.
+ */
+const bankUsable = (): boolean => savedUndos() > 0 && state.kind !== "zen" && mayOfferRewarded(modeName());
+const undosLeft = (): number => state.undoLeft + (bankUsable() ? savedUndos() : 0);
+const canUndo = (): boolean => !!snap && undosLeft() > 0 && !state.over && !drag;
+const canUndoOver = (): boolean => !!snap && undosLeft() > 0 && state.over && !state.won;
 
 function undo(): void {
-  if (!snap || state.undoLeft <= 0 || drag) return;
+  if (!snap || undosLeft() <= 0 || drag) return;
+  // The game's own undos go first; a saved one is spent (and stored) before anything changes.
+  const fromBank = state.undoLeft <= 0;
+  if (fromBank && !takeSavedUndo()) return;
   if (state.over) {
     // Take back the losing move, and the stats it banked.
     state.over = false; overT = 0;
@@ -266,7 +278,7 @@ function undo(): void {
   state.moveLog = snap.moveLog;
   state.lines = snap.lines;
   state.wk = snap.wk && state.wk ? { ...snap.wk, undos: state.wk.undos + 1 } : snap.wk;
-  state.undoLeft--;
+  if (!fromBank) state.undoLeft--;
   colorGrid = snap.colors;
   pop = blankPop();
   clears = []; particles = []; floaters = []; rings = []; beams = []; shake = 0;
@@ -324,6 +336,26 @@ function afterBreak(go: () => void): void {
   adBusy = true;
   const done = (): void => { adBusy = false; freq = afterInterstitial(freq, Date.now()); saveFreq(); go(); };
   void Promise.race([provider().interstitial("between_runs"), new Promise<null>((r) => setTimeout(() => r(null), AD_TIMEOUT_MS))]).then(done, done);
+}
+
+// ---- Coins (the rules are in wallet.ts, every number in economy.ts) ----
+let coinsThisGame = 0; // the "+N coins" line on the game-over card
+let coinPulse = 0; // the header counter bumps when coins arrive
+
+/** Shows a coin reward. Rewards earned by playing also count toward this game's "+N coins" line. */
+function coinToast(n: number, desc: string, inGame = true, tag = "COINS EARNED"): void {
+  if (n <= 0) return;
+  if (inGame) coinsThisGame += n;
+  coinPulse = 1;
+  toasts.push({ title: `+${n} coins`, desc, t: 0, label: tag });
+}
+
+/** Starter balance (new wallets only), today's bonus, and any score milestones already reached. All idempotent. */
+function payStartupCoins(): void {
+  const r = startupRewards(today());
+  coinToast(r.starter, "Welcome! Spend them in the coin shop.", false, "WELCOME GIFT");
+  coinToast(r.daily, "Daily bonus. Come back tomorrow for more.", false, "DAILY BONUS");
+  coinToast(awardAll("milestone", milestonesFor(stats.bestScore)), "For your best score so far.", false, "MILESTONE");
 }
 
 let moves = 0; // placements this session, to time the install nudge
@@ -390,6 +422,7 @@ function reset(o: GameOpts = {}): void {
   if (state.daily && !state.practice && !state.over && state.score > 0) recordOfficial(true);
   state = newState(o);
   track("game_start", { mode: modeName() });
+  coinsThisGame = 0;
   snap = null;
   gameCounted = false;
   banked = null;
@@ -414,6 +447,7 @@ function trackModes(m: { lines: number; cells: number; points: number }): void {
       markWeeklyCompleted(state.week);
       stats.weeklyWins++;
       saveStats();
+      coinToast(award("weekly", `weekly:${state.week}`, ECONOMY.weekly), "For completing the weekly challenge.");
       praises.push({ text: "Complete!", t: 0, level: 5 });
       sfx.praise(5);
       flash = Math.max(flash, 0.4);
@@ -436,6 +470,8 @@ function trackModes(m: { lines: number; cells: number; points: number }): void {
       writeJourney(j);
       stats.levels = Object.keys(j.stars).length;
       saveStats();
+      // One payout per star, the first time each star on this level is earned.
+      coinToast(awardAll("journey", journeyStarsOwed(state.level, state.stars)), `For your stars on level ${state.level}.`);
       sfx.praise(6);
       flash = 0.5;
       haptic([30, 30, 30, 30, 30, 30, 70]);
@@ -460,6 +496,12 @@ function endGame(): void {
     banked = state.score;
   }
   if (state.daily && !state.practice) recordOfficial(false);
+  // Today's daily, first attempt only (never a replay or an archive day), paid once per day.
+  if (state.daily === today() && !state.practice) {
+    coinToast(award("daily_challenge", `daily:${state.daily}`, ECONOMY.dailyChallenge), "For finishing today’s daily.");
+    const par = parFor(state.daily);
+    if (par && state.score > par) coinToast(award("daily_par", `par:${state.daily}`, ECONOMY.dailyBeatPar), `For beating par (${par}).`, true, "BEAT PAR");
+  }
   saveStats();
   checkBadges(null);
 }
@@ -562,14 +604,21 @@ async function postMyScore(): Promise<void> {
   }
 }
 
+// Coins need no network: pay today's bonus now, and again if the game is left open past midnight.
+payStartupCoins();
+document.addEventListener("visibilitychange", () => { if (!document.hidden) payStartupCoins(); });
+
 // Learn what this deployment offers (leaderboard, usage stats, shop), then act on it.
 void checkLeaderboard().then(async () => {
   applyConsent(); // analytics only ever start after the player has said yes
   if (getConsent() === "yes") track("session_start");
   if (lb.shop) {
     const back = await handleReturn(location.search);
-    await syncEntitlements();
-    if (back) toasts.push({ title: back.ok ? "Thank you!" : "Payment", desc: back.ok ? "Your purchase is ready." : back.message, t: 0 });
+    const arrived = await syncEntitlements(); // also collects any coins bought with money
+    // A coin pack is announced by its coins arriving; anything else by the usual thank-you.
+    const packArrived = back?.ok === true && isPack(back.sku) && arrived > 0;
+    if (back && !packArrived) toasts.push({ title: back.ok ? "Thank you!" : "Payment", desc: back.ok ? "Your purchase is ready." : back.message, t: 0 });
+    coinToast(arrived, "Your coins have arrived. Thank you!", false, "PURCHASE");
   }
 });
 
@@ -619,6 +668,7 @@ canvas.addEventListener("pointerdown", (e) => {
     haptics.tick();
     return;
   }
+  if (inRect(coinRect(), e.clientX, e.clientY)) { openCoinShop(); haptics.tick(); return; }
   const [tx, ty] = THEME_C();
   if (Math.hypot(e.clientX - tx, e.clientY - ty) <= 19) { cycleTheme(); markThemeShown(clock); haptics.tick(); return; }
   if (inRect(CHIP, e.clientX, e.clientY)) {
@@ -891,7 +941,10 @@ canvas.addEventListener("pointerup", (e) => {
     stats.moves++;
     stats.lines += lines;
     stats.bestCombo = Math.max(stats.bestCombo, res.combo);
-    if (scored) stats.bestScore = Math.max(stats.bestScore, state.score);
+    if (scored) {
+      stats.bestScore = Math.max(stats.bestScore, state.score);
+      coinToast(awardAll("milestone", milestonesFor(stats.bestScore)), "New best-score milestone.", true, "MILESTONE");
+    }
     if (state.kind === "zen") stats.zenLines += lines;
     if (perfect) stats.perfects++;
     saveStats();
@@ -1028,6 +1081,30 @@ function drawHud(): void {
     pill({ x: -tw / 2, y: -14, w: tw, h: 28 }, label, true);
     ctx.restore();
   }
+  drawCoinCounter();
+}
+
+/** Where the coin counter sits: centred under the trophy, clear of the score, best and the chip row. Tapping it opens the coin shop. */
+const COIN_Y = 58;
+const coinRect = (): { x: number; y: number; w: number; h: number } => ({ x: W / 2 - 40, y: COIN_Y - 9, w: 80, h: 18 });
+
+function drawCoinCounter(): void {
+  const s = balance().toLocaleString("en-US");
+  ctx.save();
+  ctx.translate(W / 2, COIN_Y);
+  const bump = reduceMotion ? 1 : 1 + 0.25 * coinPulse * coinPulse;
+  ctx.scale(bump, bump);
+  ctx.font = `900 13px ${ROUND}`;
+  const tw = ctx.measureText(s).width;
+  const x0 = -(tw + 18) / 2;
+  coin(x0 + 7, 0, 7);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.lineJoin = "round"; ctx.lineWidth = 4; ctx.strokeStyle = "#ffffff";
+  ctx.strokeText(s, x0 + 18, 1);
+  ctx.fillStyle = COLORS.combo;
+  ctx.fillText(s, x0 + 18, 1);
+  ctx.restore();
 }
 
 function drawControls(): void {
@@ -1043,7 +1120,7 @@ function drawControls(): void {
     ctx.strokeText(`\u{1F525} ${streak}`, CHIP.x + CHIP.w + 12, CHIP.y + CHIP.h / 2 + 1);
     ctx.fillText(`\u{1F525} ${streak}`, CHIP.x + CHIP.w + 12, CHIP.y + CHIP.h / 2 + 1);
   }
-  if (canUndo()) pill(undoRect(), `\u21B6 Undo${state.undoLeft > 1 ? ` ${state.undoLeft}` : ""}`, false);
+  if (canUndo()) pill(undoRect(), `\u21B6 Undo${undosLeft() > 1 ? ` ${undosLeft()}` : ""}`, false);
 
   // Theme button: a round chip showing four of the current colours.
   const [tx, ty] = THEME_C();
@@ -1198,6 +1275,7 @@ function render(dt: number): void {
   beams = beams.filter((b) => b.t < 1);
   rings = rings.filter((r) => r.t < 1);
   scorePulse = Math.max(0, scorePulse - dt * 4);
+  coinPulse = Math.max(0, coinPulse - dt * 2.5);
   shake = Math.max(0, shake - dt * 3.5);
   for (const row of pop) for (let c = 0; c < SIZE; c++) row[c] = Math.max(0, row[c]! - dt * 3);
   for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g ?? 700) * dt; p.life -= dt * 1.5; if (p.vr) p.rot = (p.rot ?? 0) + p.vr * dt; }
@@ -1452,6 +1530,14 @@ function render(dt: number): void {
     ctx.fillStyle = COLORS.dim;
     ctx.font = `800 14px ${ROUND}`;
     ctx.fillText(sub, 0, 6, cw - 32);
+    if (coinsThisGame > 0) {
+      const t = `+${coinsThisGame} coins`;
+      ctx.font = `900 13px ${ROUND}`;
+      const tw = ctx.measureText(t).width;
+      coin(-tw / 2 - 4, 29, 7);
+      ctx.fillStyle = COLORS.combo;
+      ctx.fillText(t, 7, 30);
+    }
 
     const held = (k: typeof overPress): number => (overPress === k ? 1 : 0);
     candyButton(0, 66, 200, 54, lvl ? (state.won ? "Continue" : "Retry level") : "Play again", state.won || gold ? "green" : "pink", held("again"), 21);
@@ -1473,10 +1559,11 @@ function render(dt: number): void {
       ctx.font = `700 12px ${ROUND}`;
       ctx.fillText(`Next daily in ${left.h}h ${String(left.m).padStart(2, "0")}m`, 0, 210 + dy);
     }
-    if (extra) {
+    // Only when an undo is actually on offer: the card is also taller for the leaderboard button alone.
+    if (canUndoOver() || adUndoOffered()) {
       ctx.fillStyle = COLORS.combo;
       ctx.font = `900 15px ${ROUND}`;
-      ctx.fillText(canUndoOver() ? "\u21B6 Undo last move" : "\u25B6 Watch an ad to undo", 0, 238 + dy);
+      ctx.fillText(!canUndoOver() ? "\u25B6 Watch an ad to undo" : state.undoLeft > 0 ? "\u21B6 Undo last move" : `\u21B6 Use a saved undo (${savedUndos()})`, 0, 238 + dy);
     }
     ctx.restore();
   }
