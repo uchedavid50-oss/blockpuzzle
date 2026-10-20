@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" />
+<title>Block Puzzle · Admin</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, -apple-system, sans-serif; }
+  body { margin: 0; padding: 20px; max-width: 980px; margin-inline: auto; background: #f6f1ff; color: #2a1450; }
+  @media (prefers-color-scheme: dark) { body { background: #15112b; color: #eee7ff; } table { background: #1f1940 !important; } th { background: #2b2357 !important; } }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 28px 0 8px; }
+  p.note { margin: 0 0 16px; opacity: 0.7; font-size: 14px; }
+  form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  input { padding: 10px 12px; border-radius: 10px; border: 1px solid #b9a6e8; font-size: 15px; flex: 1; min-width: 220px; }
+  button { padding: 10px 18px; border: 0; border-radius: 10px; background: #8a4dff; color: #fff; font-weight: 700; font-size: 15px; cursor: pointer; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 12px; }
+  .card { background: #fff; border-radius: 14px; padding: 12px 14px; box-shadow: 0 1px 4px rgba(60,20,120,0.12); }
+  @media (prefers-color-scheme: dark) { .card { background: #1f1940; } }
+  .card b { display: block; font-size: 26px; }
+  .card span { font-size: 12px; opacity: 0.7; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; font-size: 14px; }
+  th, td { padding: 7px 10px; text-align: right; border-bottom: 1px solid rgba(120,80,200,0.15); }
+  th:first-child, td:first-child { text-align: left; }
+  th { background: #efe6ff; font-weight: 700; }
+  #err { color: #c0264a; min-height: 20px; }
+  .scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+<h1>Block Puzzle · Admin</h1>
+<p class="note">Anonymous, aggregate numbers only. There are no individual players or events stored here.</p>
+<form id="f">
+  <input id="token" type="password" placeholder="Admin token" autocomplete="off" required />
+  <button type="submit">Load</button>
+</form>
+<div id="err"></div>
+<div id="out" hidden>
+  <div class="cards" id="cards"></div>
+  <h2>Last 14 days</h2><div class="scroll"><table id="days"></table></div>
+  <h2>Retention by sign-up day</h2><div class="scroll"><table id="cohorts"></table></div>
+  <h2>Where players came from</h2><div class="scroll"><table id="sources"></table></div>
+  <h2>Ads and purchases (14 days)</h2><div class="scroll"><table id="money"></table></div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const sum = (rows, pick) => rows.reduce((n, r) => n + (pick(r) || 0), 0);
+const pct = (n, d) => (d > 0 ? (Math.round((n / d) * 1000) / 10) + "%" : "–");
+function table(el, head, rows) {
+  el.replaceChildren();
+  const tr = (cells, tag) => { const r = document.createElement("tr"); for (const c of cells) { const x = document.createElement(tag); x.textContent = String(c); r.append(x); } return r; };
+  el.append(tr(head, "th"));
+  if (!rows.length) { const r = tr(["Nothing yet"], "td"); el.append(r); }
+  for (const row of rows) el.append(tr(row, "td"));
+}
+function card(label, value) { const d = document.createElement("div"); d.className = "card"; const b = document.createElement("b"); b.textContent = String(value); const s = document.createElement("span"); s.textContent = label; d.append(b, s); return d; }
+async function load(token) {
+  $("err").textContent = "";
+  const r = await fetch("/api/stats?days=14", { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
+  if (r.status === 401) throw new Error("Wrong token, or no admin token is set on the server.");
+  if (!r.ok) throw new Error("The server answered " + r.status + ".");
+  const d = await r.json();
+  const days = d.days; const today = days[0]; const yest = days[1] || { dau: 0 };
+  const ev = (row, n) => (row.events && row.events[n]) || 0;
+  $("cards").replaceChildren(
+    card("Players today", today.dau), card("Players yesterday", yest.dau),
+    card("Games started (14d)", sum(days, (r) => ev(r, "game_start"))),
+    card("Daily scores posted (14d)", sum(days, (r) => ev(r, "daily_posted"))),
+    card("Purchases (14d)", sum(days, (r) => ev(r, "purchase_completed"))));
+  table($("days"), ["Date", "Players", "Sessions", "Games", "Finished", "Journey wins", "Daily posts"],
+    days.map((r) => [r.date, r.dau, ev(r, "session_start"), ev(r, "game_start"), ev(r, "game_end"), ev(r, "journey_level"), ev(r, "daily_posted")]));
+  table($("cohorts"), ["Joined", "Players", "Day 1", "Day 7", "Day 30"], d.cohorts.map((c) => [c.firstSeen, c.size, c.d1 == null ? "–" : c.d1 + "%", c.d7 == null ? "–" : c.d7 + "%", c.d30 == null ? "–" : c.d30 + "%"]));
+  table($("sources"), ["Source (?src=)", "Players"], d.sources.map((s) => [s.src, s.players]));
+  const req = sum(days, (r) => ev(r, "ad_requested")), done = sum(days, (r) => ev(r, "ad_completed")), fail = sum(days, (r) => ev(r, "ad_failed"));
+  table($("money"), ["Measure", "Count"], [
+    ["Ads requested", req], ["Ads completed", done + " (" + pct(done, req) + ")"], ["Ads failed or skipped", fail],
+    ["Shop opened", sum(days, (r) => ev(r, "shop_viewed"))], ["Checkouts started", sum(days, (r) => ev(r, "purchase_started"))],
+    ["Purchases completed", sum(days, (r) => ev(r, "purchase_completed"))],
+    ["Checkout → purchase", pct(sum(days, (r) => ev(r, "purchase_completed")), sum(days, (r) => ev(r, "purchase_started")))]]);
+  $("out").hidden = false;
+}
+$("f").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const t = $("token").value.trim();
+  try { sessionStorage.setItem("bp.admin", t); } catch {}
+  load(t).catch((err) => { $("err").textContent = err.message; $("out").hidden = true; });
+});
+try { const t = sessionStorage.getItem("bp.admin"); if (t) { $("token").value = t; load(t).catch(() => {}); } } catch {}
+</script>
+</body>
+</html>

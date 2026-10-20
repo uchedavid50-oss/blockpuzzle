@@ -147,6 +147,11 @@ function fakeUpstash(): typeof fetch {
       case "ZREVRANGE": result = (await mem.zrevrange(s(0), Number(a[1]), Number(a[2]))).flatMap((e) => [e.member, String(e.score)]); break;
       case "HSET": await mem.hset(s(0), s(1), s(2)); result = 1; break;
       case "HMGET": result = await mem.hmget(s(0), a.slice(1).map(String)); break;
+      case "HKEYS": result = await mem.hkeys(s(0)); break;
+      case "INCRBY": result = await mem.incr(s(0), Number(a[1])); break;
+      case "PFADD": await mem.pfadd(s(0), s(1)); result = 1; break;
+      case "PFCOUNT": result = await mem.pfcount(s(0)); break;
+      case "MGET": result = await mem.mcount(a.map(String)); break;
       default: return new Response(JSON.stringify({ error: `unknown command ${cmd}` }), { status: 200 });
     }
     return new Response(JSON.stringify({ result }), { status: 200 });

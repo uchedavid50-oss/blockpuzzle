@@ -64,6 +64,7 @@ export async function getBoard(store: Store, query: { date?: unknown; player?: u
   const key = boardKey(date);
   const top = await store.zrevrange(key, 0, BOARD_SIZE - 1);
   const names = await store.hmget("names", top.map((e) => e.member));
+  const supporters = await store.hmget("supporters", top.map((e) => e.member));
   const me = isPlayerId(query.player) ? query.player : null;
   let mine: { rank: number; score: number } | null = null;
   if (me) {
@@ -72,7 +73,7 @@ export async function getBoard(store: Store, query: { date?: unknown; player?: u
   }
   return reply(200, {
     date, total: await store.zcard(key), me: mine,
-    top: top.map((e, i) => ({ rank: i + 1, name: names[i] ?? "Player", score: e.score, you: e.member === me })),
+    top: top.map((e, i) => ({ rank: i + 1, name: names[i] ?? "Player", score: e.score, you: e.member === me, supporter: supporters[i] !== null })),
   });
 }
 
@@ -90,10 +91,11 @@ export async function getStreaks(store: Store, query: { player?: unknown }, now 
   live.sort((a, b) => b.streak - a.streak || b.best - a.best);
   const top = live.slice(0, BOARD_SIZE);
   const names = await store.hmget("names", top.map((e) => e.member));
+  const supporters = await store.hmget("supporters", top.map((e) => e.member));
   const me = isPlayerId(query.player) ? query.player : null;
   const mineIdx = me ? live.findIndex((e) => e.member === me) : -1;
   return reply(200, {
-    top: top.map((e, i) => ({ rank: i + 1, name: names[i] ?? "Player", streak: e.streak, best: e.best, you: e.member === me })),
+    top: top.map((e, i) => ({ rank: i + 1, name: names[i] ?? "Player", streak: e.streak, best: e.best, you: e.member === me, supporter: supporters[i] !== null })),
     me: mineIdx >= 0 ? { rank: mineIdx + 1, streak: live[mineIdx]!.streak } : null,
   });
 }

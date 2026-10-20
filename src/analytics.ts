@@ -13,19 +13,8 @@ const ID_KEY = "blockpuzzle.anonId";
 const FIRST_KEY = "blockpuzzle.firstSeen";
 const SRC_KEY = "blockpuzzle.src";
 
-/** Events the game reports. Keep this list closed so the server can validate against it. */
-export type EventName =
-  | "session_start"
-  | "game_start"
-  | "game_end"
-  | "mode_entered"
-  | "journey_level"
-  | "daily_posted"
-  | "shop_viewed"
-  | "ad_requested"
-  | "ad_completed"
-  | "ad_failed"
-  | "error";
+import { type EventName } from "./events.js";
+export type { EventName };
 
 export interface GameEvent {
   readonly name: EventName;

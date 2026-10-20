@@ -16,6 +16,14 @@ export interface Store {
   zrevrange(key: string, start: number, stop: number): Promise<{ member: string; score: number }[]>;
   hset(key: string, field: string, value: string): Promise<void>;
   hmget(key: string, fields: string[]): Promise<(string | null)[]>;
+  hkeys(key: string): Promise<string[]>;
+  /** Adds to a counter and returns the new value. */
+  incr(key: string, by?: number): Promise<number>;
+  /** Approximate distinct counting (a HyperLogLog): stores no member, so nothing can be read back. */
+  pfadd(key: string, member: string): Promise<void>;
+  pfcount(key: string): Promise<number>;
+  /** Reads many counters at once without creating any that are missing (0 for absent). */
+  mcount(keys: string[]): Promise<number[]>;
 }
 
 export class MemoryStore implements Store {
@@ -56,4 +64,21 @@ export class MemoryStore implements Store {
   async hmget(key: string, fields: string[]): Promise<(string | null)[]> {
     return fields.map((f) => this.h.get(key)?.get(f) ?? null);
   }
+  async hkeys(key: string): Promise<string[]> { return [...(this.h.get(key)?.keys() ?? [])]; }
+  private counters = new Map<string, number>();
+  async incr(key: string, by = 1): Promise<number> {
+    const n = (this.counters.get(key) ?? 0) + by;
+    this.counters.set(key, n);
+    return n;
+  }
+  // In memory this is exact; Redis's version is approximate. Either way no member can be listed.
+  private pf = new Map<string, Set<string>>();
+  async pfadd(key: string, member: string): Promise<void> {
+    if (!this.pf.has(key)) this.pf.set(key, new Set());
+    this.pf.get(key)!.add(member);
+  }
+  async pfcount(key: string): Promise<number> { return this.pf.get(key)?.size ?? 0; }
+  async mcount(keys: string[]): Promise<number[]> { return keys.map((k) => this.counters.get(k) ?? 0); }
+  /** Test helper: every key this store holds, to check what is and is not kept. */
+  allKeys(): string[] { return [...this.kv.keys(), ...this.z.keys(), ...this.h.keys(), ...this.counters.keys(), ...this.pf.keys()]; }
 }
