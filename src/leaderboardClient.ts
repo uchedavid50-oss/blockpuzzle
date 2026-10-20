@@ -24,15 +24,21 @@ export function getPlayer(): Player {
   return fresh;
 }
 
+/** Adopt another device's player id (to bring purchases and leaderboard history across). */
+export function setPlayerId(id: string): boolean {
+  if (!/^[a-f0-9]{24,32}$/.test(id)) return false;
+  try { localStorage.setItem(PLAYER_KEY, JSON.stringify({ id, name: getPlayer().name })); return true; } catch { return false; }
+}
+
 export function savePlayerName(name: string): void {
   const p = getPlayer();
   try { localStorage.setItem(PLAYER_KEY, JSON.stringify({ ...p, name })); } catch { /* ignore */ }
 }
 
 /** True once /api/health says a leaderboard is configured. The UI shows leaderboard controls only then. */
-export const lb = { available: false };
+export const lb = { available: false, analytics: false, shop: false, currencies: ["NGN"] as string[] };
 
-async function call(path: string, init?: RequestInit): Promise<Response> {
+export async function call(path: string, init?: RequestInit): Promise<Response> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 8000);
   // no-store: the server lets shared caches keep boards for a few seconds, but this player must always see their own just-posted score.
@@ -42,8 +48,12 @@ async function call(path: string, init?: RequestInit): Promise<Response> {
 export async function checkLeaderboard(): Promise<void> {
   try {
     const r = await call("/api/health");
-    lb.available = r.ok && ((await r.json()) as { leaderboard?: boolean }).leaderboard === true;
-  } catch { lb.available = false; }
+    const d = r.ok ? ((await r.json()) as { leaderboard?: boolean; analytics?: boolean; shop?: boolean; currencies?: string[] }) : {};
+    lb.available = d.leaderboard === true;
+    lb.analytics = d.analytics === true;
+    lb.shop = d.shop === true;
+    if (Array.isArray(d.currencies)) lb.currencies = d.currencies.filter((c) => typeof c === "string");
+  } catch { lb.available = false; lb.analytics = false; lb.shop = false; }
 }
 
 export type PostResult =
@@ -68,8 +78,8 @@ export async function renameOnServer(name: string): Promise<boolean> {
   try { return (await post("/api/rename", { player: getPlayer().id, name })).status === 200; } catch { return false; }
 }
 
-export interface BoardData { total: number; me: { rank: number; score: number } | null; top: { rank: number; name: string; score: number; you: boolean }[] }
-export interface StreakData { me: { rank: number; streak: number } | null; top: { rank: number; name: string; streak: number; best: number; you: boolean }[] }
+export interface BoardData { total: number; me: { rank: number; score: number } | null; top: { rank: number; name: string; score: number; you: boolean; supporter?: boolean }[] }
+export interface StreakData { me: { rank: number; streak: number } | null; top: { rank: number; name: string; streak: number; best: number; you: boolean; supporter?: boolean }[] }
 
 export async function fetchBoard(date: string): Promise<BoardData | null> {
   try {

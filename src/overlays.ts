@@ -7,6 +7,11 @@ import { isMuted, toggleMute } from "./sound";
 import { lb, type BoardData, type StreakData } from "./leaderboardClient";
 import { setSetting, settings } from "./settings";
 import { haptics } from "./haptics";
+import { forSale, formatPrice } from "./entitlements";
+import { ownership } from "./ownership";
+import { beginCheckout, restoreFromCode, syncEntitlements, transferCode } from "./shopClient";
+import { applyConsent, getConsent, setConsent } from "./consent";
+import { track } from "./analytics";
 import { PALETTE, BADGES, COLLECTION_SIZE, THEMES, TILE_ORDER, applyTheme, collectionTiles, perkUndos, rankName, readStreak, stats, streakNow, themeIdx, themeUnlocked, today, unlocked, type Toast } from "./progress";
 import { officialResult, parFor, postedResult, readJourney, weeklyCompleted } from "./records";
 import { BUCKET_LABELS } from "./meta";
@@ -49,6 +54,9 @@ export const ui = {
   settingsT: 0,
   settingsPress: null as { x: number; y: number } | null,
   settingsNote: "",
+  settingsPage: "main" as "main" | "themes" | "shop",
+  shopNote: "",
+  shopBusy: false,
   // leaderboard
   lbOn: false,
   lbT: 0,
@@ -579,24 +587,31 @@ export function settingsLayout(): { k: number; cw: number } {
   return { k, cw: Math.min((W - 24) / k, 360) };
 }
 
-type ToggleKey = "sound" | "haptics" | "patterns" | "reduce";
+type ToggleKey = "sound" | "haptics" | "patterns" | "reduce" | "usage";
 const TOGGLES: { key: ToggleKey; name: string; sub: string }[] = [
   { key: "sound", name: "Sound", sub: "Effects and fanfares" },
   { key: "haptics", name: "Vibration", sub: "Taps and buzzes (Android phones)" },
   { key: "patterns", name: "Colour-blind patterns", sub: "A distinct mark on every colour" },
   { key: "reduce", name: "Calmer visuals", sub: "Less shaking, flashing and particles" },
+  { key: "usage", name: "Share anonymous usage", sub: "Helps us improve. No name, no account." },
 ];
-const toggleOn = (k: ToggleKey): boolean => (k === "sound" ? !isMuted() : settings[k]);
+const toggles = (): typeof TOGGLES => TOGGLES.filter((t) => t.key !== "usage" || lb.analytics);
+const toggleOn = (k: ToggleKey): boolean => (k === "sound" ? !isMuted() : k === "usage" ? getConsent() === "yes" : settings[k]);
+const currency = (): "NGN" | "USD" => (lb.currencies.includes("NGN") ? "NGN" : "USD");
+const btnY = 62; // the Themes / Shop buttons on the main page
+const shopRowY = (i: number): number => -236 + i * 74;
 const toggleY = (i: number): number => -250 + i * 56;
 const themeCell = (i: number, cw: number): { x: number; y: number; w: number; h: number } => {
   const w = (cw - 32) / 4;
-  return { x: -cw / 2 + 16 + (i % 4) * w, y: 10 + Math.floor(i / 4) * 84, w, h: 78 };
+  return { x: -cw / 2 + 16 + (i % 4) * w, y: -240 + Math.floor(i / 4) * 84, w, h: 78 };
 };
 
 function requirement(i: number): string {
   const t = THEMES[i]!;
   if (t.season) return t.season.label;
   if (t.req === "collection") return "Finish the collection";
+  if (t.req === "pack:dusk") return "Dusk pack (Shop)";
+  if (t.req === "pack:citrus") return "Citrus pack (Shop)";
   const b = BADGES.find((x) => x.id === t.req);
   return b ? `Earn ${b.name}` : "Locked";
 }
@@ -612,74 +627,118 @@ export function drawSettings(dt: number): void {
   ctx.translate(W / 2, H / 2 + (1 - e) * 24);
   ctx.scale(l.k, l.k);
   const cw = l.cw;
-  sheet(cw, SET_H, "Settings");
+  const page = ui.settingsPage;
+  sheet(cw, SET_H, page === "themes" ? "Themes" : page === "shop" ? "Shop" : "Settings");
 
   ctx.textBaseline = "middle";
   ctx.textAlign = "center";
 
-  TOGGLES.forEach((t, i) => {
-    const y = toggleY(i);
-    const on = toggleOn(t.key);
-    ctx.textAlign = "left";
-    ctx.fillStyle = COLORS.text;
-    ctx.font = `700 15px ${ROUND}`;
-    ctx.fillText(t.name, -cw / 2 + 28, y + 14, cw - 120);
+  if (page === "main") {
+    toggles().forEach((t, i) => {
+      const y = toggleY(i);
+      const on = toggleOn(t.key);
+      ctx.textAlign = "left";
+      ctx.fillStyle = COLORS.text;
+      ctx.font = `700 15px ${ROUND}`;
+      ctx.fillText(t.name, -cw / 2 + 28, y + 14, cw - 120);
+      ctx.fillStyle = COLORS.dim;
+      ctx.font = `500 12px ${ROUND}`;
+      ctx.fillText(t.sub, -cw / 2 + 28, y + 34, cw - 120);
+      // the switch
+      const sx = cw / 2 - 28 - 50;
+      ctx.fillStyle = on ? BRAND.violet : "#d9cbea";
+      ctx.beginPath();
+      ctx.roundRect(sx, y + 10, 50, 28, 14);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(sx + (on ? 36 : 14), y + 24, 10, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    candyButton(lb.shop ? -88 : 0, btnY, 160, 40, "Themes", "violet", 0, 16);
+    if (lb.shop) candyButton(88, btnY, 160, 40, "Shop", "gold", 0, 16);
+    ctx.textAlign = "center";
     ctx.fillStyle = COLORS.dim;
     ctx.font = `500 12px ${ROUND}`;
-    ctx.fillText(t.sub, -cw / 2 + 28, y + 34, cw - 120);
-    // the switch
-    const sx = cw / 2 - 28 - 50;
-    ctx.fillStyle = on ? BRAND.violet : "#d9cbea";
-    ctx.beginPath();
-    ctx.roundRect(sx, y + 10, 50, 28, 14);
-    ctx.fill();
-    ctx.fillStyle = "#fff";
-    ctx.beginPath();
-    ctx.arc(sx + (on ? 36 : 14), y + 24, 10, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  ctx.textAlign = "left";
-  ctx.fillStyle = COLORS.text;
-  ctx.font = `800 15px ${ROUND}`;
-  ctx.fillText("Theme", -cw / 2 + 28, -6);
-  THEMES.forEach((t, i) => {
-    const c = themeCell(i, cw);
-    const ok = themeUnlocked(i);
-    const sel = themeIdx === i;
-    ctx.fillStyle = sel ? "rgba(255,184,31,0.2)" : "rgba(138,77,255,0.07)";
-    ctx.beginPath();
-    ctx.roundRect(c.x + 3, c.y, c.w - 6, c.h - 4, 14);
-    ctx.fill();
-    if (sel) {
-      ctx.strokeStyle = "rgba(255,197,85,0.6)";
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-    }
-    ctx.globalAlpha = ok ? 1 : 0.4;
-    for (let d = 0; d < 4; d++) {
-      ctx.fillStyle = t.colors[d]!;
+    ctx.fillText(ui.settingsNote, 0, 262, cw - 40);
+  } else if (page === "themes") {
+    THEMES.forEach((t, i) => {
+      const c = themeCell(i, cw);
+      const ok = themeUnlocked(i);
+      const sel = themeIdx === i;
+      ctx.fillStyle = sel ? "rgba(255,184,31,0.2)" : "rgba(138,77,255,0.07)";
       ctx.beginPath();
-      ctx.arc(c.x + c.w / 2 + (d % 2 ? 7 : -7), c.y + 17 + (d < 2 ? -0 : 14), 6, 0, Math.PI * 2);
+      ctx.roundRect(c.x + 3, c.y, c.w - 6, c.h - 4, 14);
       ctx.fill();
-    }
+      if (sel) {
+        ctx.strokeStyle = "rgba(255,197,85,0.6)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+      ctx.globalAlpha = ok ? 1 : 0.4;
+      for (let d = 0; d < 4; d++) {
+        ctx.fillStyle = t.colors[d]!;
+        ctx.beginPath();
+        ctx.arc(c.x + c.w / 2 + (d % 2 ? 7 : -7), c.y + 17 + (d < 2 ? -0 : 14), 6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.textAlign = "center";
+      ctx.fillStyle = COLORS.text;
+      ctx.font = `700 11px ${ROUND}`;
+      ctx.fillText(t.name, c.x + c.w / 2, c.y + 50, c.w - 8);
+      ctx.fillStyle = sel ? COLORS.combo : COLORS.dim;
+      ctx.font = `600 9.5px ${ROUND}`;
+      ctx.fillText(sel ? "Selected" : ok ? (t.season ? "Limited time" : "Unlocked") : requirement(i), c.x + c.w / 2, c.y + 65, c.w - 6);
+      ctx.globalAlpha = 1;
+    });
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = COLORS.dim;
+    ctx.font = `500 12px ${ROUND}`;
+    ctx.fillText(ui.settingsNote || "Tap a theme to wear it. Locked ones show how to earn them.", 0, 262, cw - 40);
+  } else {
+    drawShop(cw);
+  }
+
+  candyButton(0, 296, 168, 40, page === "main" ? "Done" : "Back", "violet", 0, 16);
+  ctx.restore();
+}
+
+function drawShop(cw: number): void {
+  const items = forSale(ownership.ent);
+  ctx.textBaseline = "middle";
+  if (items.length === 0) {
     ctx.textAlign = "center";
     ctx.fillStyle = COLORS.text;
-    ctx.font = `700 11px ${ROUND}`;
-    ctx.fillText(t.name, c.x + c.w / 2, c.y + 50, c.w - 8);
-    ctx.fillStyle = sel ? COLORS.combo : COLORS.dim;
-    ctx.font = `600 9.5px ${ROUND}`;
-    ctx.fillText(sel ? "Selected" : ok ? (t.season ? "Limited time" : "Unlocked") : requirement(i), c.x + c.w / 2, c.y + 65, c.w - 6);
-    ctx.globalAlpha = 1;
+    ctx.font = `800 16px ${ROUND}`;
+    ctx.fillText("You own everything. Thank you!", 0, -150, cw - 40);
+  }
+  items.forEach((it, i) => {
+    const y = shopRowY(i);
+    ctx.fillStyle = "rgba(138,77,255,0.07)";
+    ctx.beginPath();
+    ctx.roundRect(-cw / 2 + 16, y, cw - 32, 66, 14);
+    ctx.fill();
+    ctx.textAlign = "left";
+    ctx.fillStyle = COLORS.text;
+    ctx.font = `800 15px ${ROUND}`;
+    ctx.fillText(it.name, -cw / 2 + 28, y + 22, cw - 150);
+    ctx.fillStyle = COLORS.dim;
+    ctx.font = `500 11.5px ${ROUND}`;
+    ctx.fillText(it.blurb, -cw / 2 + 28, y + 44, cw - 150);
+    candyButton(cw / 2 - 66, y + 33, 92, 36, formatPrice(it.price, currency()), "gold", 0, 14);
   });
-
   ctx.textAlign = "center";
   ctx.fillStyle = COLORS.dim;
-  ctx.font = `500 12px ${ROUND}`;
-  ctx.fillText(ui.settingsNote || "Tap a theme to wear it. Locked ones show how to earn them.", 0, 262, cw - 40);
-
-  candyButton(0, 296, 168, 40, "Done", "violet", 0, 16);
-  ctx.restore();
+  ctx.font = `500 11.5px ${ROUND}`;
+  ctx.fillText(ui.shopNote || "Cosmetic only. Nothing here changes how the game plays.", 0, 190, cw - 40);
+  ctx.font = `600 11px ${ROUND}`;
+  ctx.fillText("Restore code (tap to copy):", 0, 216, cw - 40);
+  ctx.fillText(transferCode(), 0, 234, cw - 20);
+  ctx.fillStyle = BRAND.violet;
+  ctx.font = `700 12px ${ROUND}`;
+  ctx.fillText("Restore on this device", 0, 258, cw - 40);
 }
 
 /** Handles a tap on the settings sheet at card-local coordinates. Returns true if the sheet should close. */
@@ -687,25 +746,55 @@ export function settingsTap(lx: number, ly: number): boolean {
   const l = settingsLayout();
   const cw = l.cw;
   if (Math.abs(lx) > cw / 2 || Math.abs(ly) > SET_H / 2) return true; // tapped outside the card
-  if (ly >= 274 && ly <= 320 && Math.abs(lx) <= 90) return true;
-  for (let i = 0; i < TOGGLES.length; i++) {
-    const y = toggleY(i);
-    if (ly >= y && ly <= y + 48) {
-      const key = TOGGLES[i]!.key;
-      if (key === "sound") toggleMute();
-      else {
-        setSetting(key, !settings[key]);
-        if (key === "reduce") setReduceMotion(settings.reduce);
-      }
-      haptics.tick();
+  const page = ui.settingsPage;
+  if (ly >= 274 && ly <= 320 && Math.abs(lx) <= 90) {
+    if (page === "main") return true;
+    ui.settingsPage = "main"; ui.settingsNote = ""; ui.shopNote = ""; return false;
+  }
+  if (page === "main") {
+    if (ly >= btnY - 20 && ly <= btnY + 20) {
+      if (lb.shop && lx > 8) { ui.settingsPage = "shop"; track("shop_viewed"); void syncEntitlements(); haptics.tick(); }
+      else if (lx < (lb.shop ? -8 : 80) && lx > (lb.shop ? -168 : -80)) { ui.settingsPage = "themes"; haptics.tick(); }
       return false;
     }
-  }
-  for (let i = 0; i < THEMES.length; i++) {
-    const c = themeCell(i, cw);
-    if (lx >= c.x && lx <= c.x + c.w && ly >= c.y && ly <= c.y + c.h) {
-      if (themeUnlocked(i)) { applyTheme(i); ui.settingsNote = `Theme: ${THEMES[i]!.name}`; haptics.tick(); }
-      else ui.settingsNote = THEMES[i]!.season ? `${THEMES[i]!.name} is available ${THEMES[i]!.season!.label}.` : `${requirement(i)} to unlock ${THEMES[i]!.name}.`;
+    const list = toggles();
+    for (let i = 0; i < list.length; i++) {
+      const y = toggleY(i);
+      if (ly >= y && ly <= y + 48) {
+        const key = list[i]!.key;
+        if (key === "sound") toggleMute();
+        else if (key === "usage") { setConsent(getConsent() === "yes" ? "no" : "yes"); applyConsent(); }
+        else {
+          setSetting(key, !settings[key]);
+          if (key === "reduce") setReduceMotion(settings.reduce);
+        }
+        haptics.tick();
+        return false;
+      }
+    }
+  } else if (page === "themes") {
+    for (let i = 0; i < THEMES.length; i++) {
+      const c = themeCell(i, cw);
+      if (lx >= c.x && lx <= c.x + c.w && ly >= c.y && ly <= c.y + c.h) {
+        if (themeUnlocked(i)) { applyTheme(i); ui.settingsNote = `Theme: ${THEMES[i]!.name}`; haptics.tick(); }
+        else ui.settingsNote = THEMES[i]!.season ? `${THEMES[i]!.name} is available ${THEMES[i]!.season!.label}.` : `${requirement(i)} to unlock ${THEMES[i]!.name}.`;
+        return false;
+      }
+    }
+  } else {
+    const items = forSale(ownership.ent);
+    for (let i = 0; i < items.length; i++) {
+      const y = shopRowY(i);
+      if (ly >= y && ly <= y + 66 && lx > cw / 2 - 118 && !ui.shopBusy) {
+        ui.shopBusy = true; ui.shopNote = "Opening checkout…";
+        void beginCheckout(items[i]!.sku, currency()).then((r) => { ui.shopBusy = false; ui.shopNote = r.ok ? "Opening checkout…" : r.message; });
+        return false;
+      }
+    }
+    if (ly >= 204 && ly <= 244) { void navigator.clipboard?.writeText(transferCode()).then(() => { ui.shopNote = "Code copied."; }, () => {}); return false; }
+    if (ly >= 248 && ly <= 270) {
+      const code = window.prompt("Paste your restore code");
+      if (code) void restoreFromCode(code).then((r) => { ui.shopNote = r.ok ? "Restored." : r.message; });
       return false;
     }
   }

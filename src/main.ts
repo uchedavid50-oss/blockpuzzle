@@ -19,7 +19,9 @@ import { askName } from "./nameDialog";
 import { checkLeaderboard, fetchBoard, fetchStreaks, getPlayer, lb, postDaily, savePlayerName } from "./leaderboardClient";
 import { settings } from "./settings";
 import type { MoveTuple } from "./verify";
-import { startAnalytics, track } from "./analytics";
+import { track } from "./analytics";
+import { applyConsent, getConsent } from "./consent";
+import { handleReturn, syncEntitlements } from "./shopClient";
 import { drawMap, mapCancel, mapCovers, mapDown, mapMove, mapUi, mapUp, mapWheel, openMap, setMapHandlers } from "./mapView";
 
 interface State {
@@ -522,11 +524,16 @@ async function postMyScore(): Promise<void> {
   }
 }
 
-void checkLeaderboard();
-
-// Anonymous analytics stay off until a collector address is configured (VITE_ANALYTICS_ENDPOINT).
-startAnalytics({ endpoint: import.meta.env.VITE_ANALYTICS_ENDPOINT ?? null });
-track("session_start");
+// Learn what this deployment offers (leaderboard, usage stats, shop), then act on it.
+void checkLeaderboard().then(async () => {
+  applyConsent(); // analytics only ever start after the player has said yes
+  if (getConsent() === "yes") track("session_start");
+  if (lb.shop) {
+    const back = await handleReturn(location.search);
+    await syncEntitlements();
+    if (back) toasts.push({ title: back.ok ? "Thank you!" : "Payment", desc: back.ok ? "Your purchase is ready." : back.message, t: 0 });
+  }
+});
 
 // ---- Drag ----------------------------------------------------------------------
 
@@ -641,7 +648,7 @@ canvas.addEventListener("pointerup", (e) => {
     const inCard = Math.abs(lx) <= l.cw / 2 && Math.abs(ly) <= MODES_H / 2;
     if (!inCard) { ui.modesOn = false; return; }
     if (ui.modesView === "main" && Math.hypot(lx - (l.cw / 2 - 38), ly + 251) <= 22) {
-      ui.modesOn = false; ui.settingsOn = true; ui.settingsT = 0; ui.settingsNote = "";
+      ui.modesOn = false; ui.settingsOn = true; ui.settingsT = 0; ui.settingsNote = ""; ui.settingsPage = "main"; ui.shopNote = "";
       haptics.tick();
       return;
     }

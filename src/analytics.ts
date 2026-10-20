@@ -165,18 +165,35 @@ export function flush(): void {
  * Turn analytics on. Call once at startup. Passing no endpoint leaves every `track` call a no-op,
  * which is how the game behaves in development and if the collector is ever removed.
  */
+let listening = false;
+
 export function startAnalytics(opts: { endpoint?: string | null; search?: string } = {}): void {
   endpoint = opts.endpoint ?? null;
   if (!endpoint) return;
   captureSource(opts.search ?? location.search);
+  if (listening) return;
+  listening = true;
   addEventListener("pagehide", flush);
   addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") flush();
   });
 }
 
+/** Turn analytics off. With `forget`, also delete the id, first-seen day and source from this device. */
+export function stopAnalytics(opts: { forget?: boolean } = {}): void {
+  endpoint = null;
+  queue = [];
+  if (flushTimer !== null) { clearTimeout(flushTimer); flushTimer = null; }
+  if (opts.forget) {
+    for (const k of [ID_KEY, FIRST_KEY, SRC_KEY]) {
+      try { localStorage.removeItem(k); } catch { /* ignore */ }
+    }
+  }
+}
+
 /** Test seam: clears module state between tests. Not used by the game. */
 export function __reset(): void {
+  listening = false;
   queue = [];
   endpoint = null;
   if (flushTimer !== null) {

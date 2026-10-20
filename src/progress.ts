@@ -3,6 +3,7 @@
 
 import { haptic } from "./haptics";
 import { inSeason, type MonthDay } from "./meta";
+import { ownsSku } from "./ownership.js";
 import { sfx } from "./sound";
 import { applyPlay, currentStreak, type StreakRec } from "./streak";
 
@@ -152,6 +153,15 @@ export const THEMES: { name: string; colors: string[]; req?: string; season?: { 
   { name: "Aurora", req: "streak7", colors: ["#3ef5c0", "#4ad1ff", "#7c6bff", "#c45bff", "#ff6bd6", "#57ffa0", "#39b3ff", "#a2ff5e"] },
   { name: "Prism", req: "collection", colors: ["#ff4d6d", "#ff9f1c", "#ffe14d", "#5ce65c", "#2ec4b6", "#4d8cff", "#9b5cff", "#ff5cc8"] },
   { name: "Midnight", req: "perfect", colors: ["#5b7cff", "#8a5bff", "#2ec8ff", "#ff4fa3", "#31e6c1", "#ffd34f", "#7aa2ff", "#c06bff"] },
+  // Paid packs (Shop). Cosmetic only.
+  { name: "Dusk Plum", req: "pack:dusk", colors: ["#7e57c2", "#ab47bc", "#ec407a", "#ef6c00", "#26a69a", "#42a5f5", "#9ccc65", "#ffca28"] },
+  { name: "Midnight Ink", req: "pack:dusk", colors: ["#3949ab", "#5e35b1", "#8e24aa", "#d81b60", "#00897b", "#039be5", "#7cb342", "#f9a825"] },
+  { name: "Slate", req: "pack:dusk", colors: ["#6d8fb3", "#8f7fb3", "#b37f96", "#b3917f", "#7fb39a", "#7fa9b3", "#a3b37f", "#b3a77f"] },
+  { name: "Ember Glow", req: "pack:dusk", colors: ["#ff6b35", "#f7c59f", "#efefd0", "#004e89", "#1a659e", "#ff9f1c", "#e71d36", "#2ec4b6"] },
+  { name: "Lemon", req: "pack:citrus", colors: ["#ffd60a", "#ff9e00", "#ff5400", "#9ef01a", "#38b000", "#00b4d8", "#7209b7", "#f72585"] },
+  { name: "Lime Fizz", req: "pack:citrus", colors: ["#c6ff00", "#00e676", "#1de9b6", "#00e5ff", "#ffea00", "#ffab00", "#ff6d00", "#ff4081"] },
+  { name: "Orange Grove", req: "pack:citrus", colors: ["#ff9a00", "#ffb703", "#fb8500", "#e63946", "#2a9d8f", "#8ecae6", "#219ebc", "#a8dadc"] },
+  { name: "Tangerine Pop", req: "pack:citrus", colors: ["#ff7b00", "#ff9500", "#ffb700", "#ff006e", "#8338ec", "#3a86ff", "#06d6a0", "#fb5607"] },
   // Limited-time themes: usable only during their window each year.
   { name: "Pumpkin", season: { from: [10, 15], to: [11, 3], label: "Oct 15 \u2013 Nov 3" }, colors: ["#ff7a1a", "#ffb347", "#7bd16f", "#b57aff", "#ff5a3c", "#ffd23f", "#4fc3a1", "#e8590c"] },
   { name: "Frost", season: { from: [12, 1], to: [1, 6], label: "Dec 1 \u2013 Jan 6" }, colors: ["#8fd3ff", "#d6f0ff", "#5aa9ff", "#b8c6ff", "#7ee8e0", "#e8f7ff", "#9bb7ff", "#6fe0ff"] },
@@ -167,6 +177,8 @@ export let themeShownAt = -10;
 export const themeUnlocked = (i: number): boolean => {
   const { req, season } = THEMES[i]!;
   if (season) return inSeason(new Date(), season.from, season.to);
+  if (req === "pack:dusk") return ownsSku("theme_pack_dusk");
+  if (req === "pack:citrus") return ownsSku("theme_pack_citrus");
   return !req || (req === "collection" ? collectionTiles() >= COLLECTION_SIZE : has(req));
 };
 /** Next theme you have unlocked, wrapping around. */
