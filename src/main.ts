@@ -19,6 +19,7 @@ import { askName } from "./nameDialog";
 import { checkLeaderboard, fetchBoard, fetchStreaks, getPlayer, lb, postDaily, savePlayerName } from "./leaderboardClient";
 import { settings } from "./settings";
 import type { MoveTuple } from "./verify";
+import { startAnalytics, track } from "./analytics";
 import { drawMap, mapCancel, mapCovers, mapDown, mapMove, mapUi, mapUp, mapWheel, openMap, setMapHandlers } from "./mapView";
 
 interface State {
@@ -98,6 +99,9 @@ function newState(o: GameOpts = {}): State {
     wk: kind === "weekly" ? blankRun() : null, moves: 0, lines: 0, won: false, stars: 0, moveLog: [],
   };
 }
+
+/** The mode in play, as analytics names it. */
+const modeName = (): string => (state.kind !== "classic" ? state.kind : state.daily ? "daily" : state.challenge !== null ? "challenge" : "classic");
 
 /** Records today's first attempt (see records.ts). `abandoned` marks one walked away from mid-game. */
 function recordOfficial(abandoned: boolean): void {
@@ -346,6 +350,7 @@ function reset(o: GameOpts = {}): void {
   // Walking away from today's first attempt closes it with the score so far: no retrying until it looks good.
   if (state.daily && !state.practice && !state.over && state.score > 0) recordOfficial(true);
   state = newState(o);
+  track("game_start", { mode: modeName() });
   snap = null;
   gameCounted = false;
   banked = null;
@@ -385,6 +390,7 @@ function trackModes(m: { lines: number; cells: number; points: number }): void {
       state.over = true;
       overT = 0;
       state.stars = starsFor(lv, prog);
+      track("journey_level", { level: state.level, stars: state.stars });
       const j = readJourney();
       j.stars[state.level] = Math.max(j.stars[state.level] ?? 0, state.stars);
       if (state.level >= j.next) { j.next = state.level + 1; }
@@ -403,6 +409,7 @@ function trackModes(m: { lines: number; cells: number; points: number }): void {
 function endGame(): void {
   state.over = true;
   overT = 0;
+  track("game_end", { mode: modeName(), score: state.score, moves: state.moves });
   sfx.gameOver();
   haptics.gameOver();
   if (state.kind === "classic" || state.kind === "weekly") {
@@ -441,6 +448,7 @@ function easeZen(): boolean {
 
 function pickMode(i: number): void {
   haptics.tick();
+  track("mode_entered", { mode: ["classic", "daily", "weekly", "journey", "zen", "archive", "leaderboard"][i] ?? "other" });
   if (i === 5) { ui.modesView = "archive"; return; }
   if (i === 6) { ui.modesOn = false; openLeaderboard(); return; }
   ui.modesOn = false;
@@ -495,6 +503,7 @@ async function postMyScore(): Promise<void> {
     if (r.ok) {
       savePlayerName(entered);
       savePosted(date, { rank: r.rank, total: r.total, score: r.score, streak: r.streak });
+      track("daily_posted", { rank: r.rank });
       ui.lbMsg = `Posted! You are #${r.rank} of ${r.total.toLocaleString("en-US")}.`;
       sfx.praise(2);
       haptic([20, 30, 20]);
@@ -514,6 +523,10 @@ async function postMyScore(): Promise<void> {
 }
 
 void checkLeaderboard();
+
+// Anonymous analytics stay off until a collector address is configured (VITE_ANALYTICS_ENDPOINT).
+startAnalytics({ endpoint: import.meta.env.VITE_ANALYTICS_ENDPOINT ?? null });
+track("session_start");
 
 // ---- Drag ----------------------------------------------------------------------
 

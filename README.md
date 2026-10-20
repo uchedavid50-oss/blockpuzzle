@@ -52,6 +52,14 @@ server never trusts a score. Your game sends its list of moves and the server re
 same rules code, so only a legal game can score. (That proves a game was legal, not that a human played
 it.) Streaks are counted from the days you post.
 
+## Privacy, ads and purchases
+
+There is no tracking by default. The code for anonymous, self-hosted analytics (an opaque random id, no
+personal data, no third-party SDK), an ad wrapper and a purchases model is in the repo, but it does
+nothing until you configure it: analytics need `VITE_ANALYTICS_ENDPOINT`, ads need an ad network on the
+page, and purchases need a server to verify them. None of it can change the rules or the leaderboard:
+ads never reward anything in the daily, the weekly or a challenge.
+
 ## Run it
 
 ```bash

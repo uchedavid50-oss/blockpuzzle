@@ -31,8 +31,20 @@ no rotation, no timer. Never reference Tetris in code, assets or naming.
   `npm run validate` checks journey, weekly goals and region shapes against the bot.
 
 ## Scope
-No ads or analytics. No coin or booster economies, no obstacle or gem cells, and no adaptive
-difficulty. Do not add them unless I ask.
+No coin or booster economies, no obstacle or gem cells, and no adaptive difficulty. Do not add
+them unless I ask.
+
+Monetisation and measurement exist because I asked for them (src/ads.ts, entitlements.ts,
+analytics.ts). They are built to stay inert until configured, and they must never touch the rules:
+- None of them may alter the piece generator, the board, the scoring or the leaderboard's replay
+  verification. Everything sold or shown is cosmetic or removes an interruption.
+- Ads go only through AdProvider. A reward is granted only on a `completed` outcome, and never in
+  the daily, the weekly or a challenge (mayOfferRewarded). With no ad network on the page the null
+  provider is used and the game plays exactly as before.
+- Entitlements: the client's copy is a cache for drawing the shop. A purchase counts only after a
+  server has verified it (not built yet), the same way a score counts only after replay.
+- Analytics: anonymous and self-hosted, with a closed list of event names, no third-party SDK and no
+  personal data. Off unless VITE_ANALYTICS_ENDPOINT is set.
 
 The one backend is the leaderboard (api/ routes and src/server/), kept deliberately small:
 - Anonymous. A random player id and a public nickname; no accounts and no personal data.
