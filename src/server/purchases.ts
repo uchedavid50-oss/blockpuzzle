@@ -48,7 +48,7 @@ export async function startCheckout(store: Store, ps: Paystack, body: unknown, o
 
   const amount = currency === "USD" ? price.usd : price.ngn; // the browser never names an amount
   const reference = randomRef();
-  const email = typeof b.email === "string" ? b.email : `${b.player}@players.blockpuzzle.invalid`;
+  const email = typeof b.email === "string" ? b.email : `${b.player}@example.com`;
   const pending: Pending = { player: b.player, sku: b.sku, amount, currency };
   await store.setNx(`pending:${reference}`, JSON.stringify(pending), 3 * DAY);
   try {
