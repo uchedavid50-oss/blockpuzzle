@@ -15,6 +15,14 @@ export function loadAds(clientId: string | undefined, test: boolean): void {
   w.adsbygoogle = w.adsbygoogle ?? [];
   const queue = w.adsbygoogle;
   w.adBreak = w.adConfig = (o: unknown): void => { queue.push(o); };
+  // The page may already carry Google's tag (AdSense site verification asks for it). Reuse it, never load twice.
+  const existing = document.querySelector<HTMLScriptElement>('script[src*="pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"]');
+  if (existing) {
+    const ready = (): void => { adsState.ready = true; (w.adConfig as (o: unknown) => void)({ preloadAdBreaks: "on", sound: "on" }); };
+    if ((w.adsbygoogle as unknown as { loaded?: boolean }).loaded) ready(); else existing.addEventListener("load", ready);
+    existing.addEventListener("error", () => { adsState.blocked = true; });
+    return;
+  }
   const s = document.createElement("script");
   s.async = true;
   s.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${clientId}`;
