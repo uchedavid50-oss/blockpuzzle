@@ -3,3 +3,8 @@ dist
 .vercel
 .env*
 .neon
+
+# local agent tooling
+.agents/
+.claude/
+skills-lock.json
