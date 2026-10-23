@@ -2,6 +2,7 @@
 // a JSON array posted to the REST URL, so no client library is needed.
 
 import type { Store } from "./store.js";
+import { postgresStore } from "./postgres.js";
 
 type Fetch = typeof fetch;
 
@@ -63,6 +64,8 @@ export function storeFromEnv(env: Record<string, string | undefined> = process.e
   // Local development and tests can supply an in-memory store (see scripts/dev-api.ts).
   const injected = (globalThis as { __blockpuzzleStore?: Store }).__blockpuzzleStore;
   if (injected) return injected;
+  // Postgres (Neon) only when asked for by name: a database URL being present must never move live data.
+  if (env.STORE === "postgres" && env.DATABASE_URL) return postgresStore(env.DATABASE_URL);
   const url = env.KV_REST_API_URL ?? env.UPSTASH_REDIS_REST_URL;
   const token = env.KV_REST_API_TOKEN ?? env.UPSTASH_REDIS_REST_TOKEN;
   return url && token ? new RedisStore(url, token) : null;

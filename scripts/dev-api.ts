@@ -2,7 +2,8 @@
 // leaderboard can be tried without Redis. Run with: npm run dev:api  (and npm run dev in another tab).
 
 import { createServer } from "node:http";
-import { MemoryStore } from "../src/server/store";
+import { MemoryStore, type Store } from "../src/server/store";
+import { postgresStore } from "../src/server/postgres";
 import { submitScore } from "../src/server/handlers";
 import { RULES_VERSION } from "../src/verify";
 import { playBot } from "../src/solver";
@@ -23,8 +24,10 @@ import * as coinsApi from "../api/coins";
 process.env.PAYSTACK_FAKE = "1";
 process.env.ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "dev";
 
-const store = new MemoryStore();
-(globalThis as { __blockpuzzleStore?: MemoryStore }).__blockpuzzleStore = store;
+// STORE=postgres runs the same routes against Neon (DATABASE_URL) instead of memory, and skips seeding.
+const usePg = process.env.STORE === "postgres" && !!process.env.DATABASE_URL;
+const store: Store = usePg ? postgresStore(process.env.DATABASE_URL!) : new MemoryStore();
+(globalThis as { __blockpuzzleStore?: Store }).__blockpuzzleStore = store;
 
 type Route = { GET?: (r: Request) => Response | Promise<Response>; POST?: (r: Request) => Response | Promise<Response> };
 const routes: Record<string, Route> = { "/api/health": health, "/api/submit": submit, "/api/rename": rename, "/api/board": board, "/api/streaks": streaks, "/api/collect": collectApi, "/api/stats": statsApi, "/api/checkout": checkout, "/api/purchase": purchase, "/api/entitlements": entitlements, "/api/paystack-webhook": webhook, "/api/coins": coinsApi };
@@ -33,7 +36,7 @@ const routes: Record<string, Route> = { "/api/health": health, "/api/submit": su
 const today = new Date().toISOString().slice(0, 10);
 const day = (offset: number): string => new Date(Date.now() - offset * 86_400_000).toISOString().slice(0, 10);
 const seedPlayers: [string, string, number][] = [["Ada", "a1", 70], ["Bo Strong", "b2", 55], ["Cleo", "c3", 40], ["Dev", "d4", 30], ["Eve", "e5", 22], ["Fay", "f6", 14]];
-for (const [name, tag, maxMoves] of seedPlayers) {
+for (const [name, tag, maxMoves] of usePg ? [] : seedPlayers) {
   const id = tag.repeat(12);
   const days = tag === "a1" ? [2, 1, 0] : tag === "b2" ? [1, 0] : [0];
   for (const off of days) {
@@ -43,7 +46,7 @@ for (const [name, tag, maxMoves] of seedPlayers) {
     await submitScore(store, { v: RULES_VERSION, player: id, name, date, moves: moveLog });
   }
 }
-console.log(`seeded ${seedPlayers.length} players for ${today}`);
+console.log(usePg ? "using Neon Postgres, no seed data" : `seeded ${seedPlayers.length} players for ${today}`);
 
 createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers["x-forwarded-host"] ?? req.headers.host ?? "localhost"}`);

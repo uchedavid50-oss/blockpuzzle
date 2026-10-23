@@ -88,7 +88,7 @@ npm run build      # type-check and build to dist/
 npm run dev:api    # local leaderboard API (in-memory), for use with npm run dev
 ```
 
-TypeScript (strict), Vite and Canvas 2D. No game engine and no runtime dependencies.
+TypeScript (strict), Vite and Canvas 2D. No game engine. The only runtime dependency is the Neon driver, used by the optional Postgres store.
 
 ## How it is built
 
@@ -116,3 +116,10 @@ Re-run `par` and `levels` whenever the rules or the piece set change, because bo
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+### Optional: Postgres on Neon
+
+The server storage is Redis by default. Set `STORE=postgres` and `DATABASE_URL` (Neon) to run the same
+routes on Postgres instead; tables are created on first use. `neon.ts` holds the Neon project config
+(`neon deploy`). Switching does not move existing Redis data. To test: `DATABASE_URL=… npx vitest run src/server/postgres.test.ts`
+runs the storage contract against the real database, and `STORE=postgres npm run dev:api` serves the app on it.
