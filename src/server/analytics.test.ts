@@ -111,11 +111,15 @@ describe("retention and sources", () => {
 
 describe("tokenOk (the admin guard)", () => {
   it("needs the exact bearer token", () => {
-    expect(tokenOk("Bearer s3cret", "s3cret")).toBe(true);
-    expect(tokenOk("Bearer s3cre", "s3cret")).toBe(false);
-    expect(tokenOk("Bearer s3cretX", "s3cret")).toBe(false);
-    expect(tokenOk("s3cret", "s3cret")).toBe(false);
-    expect(tokenOk(null, "s3cret")).toBe(false);
+    const T = "s3cret-s3cret-s3cret-s3cret";
+    expect(tokenOk(`Bearer ${T}`, T)).toBe(true);
+    expect(tokenOk(`Bearer ${T.slice(0, -1)}`, T)).toBe(false);
+    expect(tokenOk(`Bearer ${T}X`, T)).toBe(false);
+    expect(tokenOk(T, T)).toBe(false);
+    expect(tokenOk(null, T)).toBe(false);
+  });
+  it("stays closed when the configured token is too short to be safe", () => {
+    expect(tokenOk("Bearer s3cret", "s3cret")).toBe(false);
   });
   it("is closed when no token is configured", () => {
     expect(tokenOk("Bearer ", "")).toBe(false);

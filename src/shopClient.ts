@@ -5,7 +5,8 @@ import { track } from "./analytics.js";
 import { award } from "./coins.js";
 import { isPack, type PackId } from "./economy.js";
 import { isSku, type Sku } from "./entitlements.js";
-import { call, getPlayer, lb, setPlayerId } from "./leaderboardClient.js";
+import { account, adoptAccount, lostAccount } from "./cloudClient.js";
+import { call, getPlayer, lb, resetPlayer, setPlayerId } from "./leaderboardClient.js";
 import { setOwned } from "./ownership.js";
 
 export type Outcome = { ok: true; sku?: string } | { ok: false; message: string };
@@ -22,9 +23,14 @@ async function postJson(path: string, body: unknown): Promise<{ status: number; 
 export async function syncEntitlements(): Promise<number> {
   if (!lb.shop) return 0;
   try {
-    const r = await call(`/api/entitlements?player=${getPlayer().id}`);
-    if (!r.ok) return 0;
-    const d = (await r.json()) as { owned?: unknown; coins?: unknown };
+    const { status, data: d } = await postJson("/api/entitlements", { player: getPlayer().id });
+    if (status !== 200) return 0;
+    if (d.moved === true) {
+      // This device's code was used to move the account to another device: it owns nothing now.
+      setOwned([]);
+      if (account()) lostAccount(); else resetPlayer(); // a signed-in player can sign in again to rejoin it
+      return 0;
+    }
     if (Array.isArray(d.owned)) setOwned(d.owned);
     if ((typeof d.coins === "number" && d.coins > 0) || pendingClaim()) return await claimCoins();
   } catch { /* offline: keep the cache */ }
@@ -105,8 +111,21 @@ export async function handleReturn(search: string, replaceUrl = true): Promise<O
 /** The code that moves purchases and leaderboard history to another device. Treat it like a password. */
 export const transferCode = (): string => getPlayer().id;
 
+/**
+ * Moves an account here from another device. The server gives this device a new code and retires the
+ * old one, so a code works on one device at a time and cannot be passed around to unlock purchases.
+ */
 export async function restoreFromCode(code: string): Promise<Outcome> {
-  if (!setPlayerId(code.trim().toLowerCase())) return { ok: false, message: "That code does not look right." };
-  await syncEntitlements();
-  return { ok: true };
+  const old = code.trim().toLowerCase();
+  if (!/^[a-f0-9]{24,32}$/.test(old)) return { ok: false, message: "That code does not look right." };
+  if (old === getPlayer().id) return { ok: false, message: "That is this device's own code." };
+  try {
+    const { status, data } = await postJson("/api/transfer", { player: old });
+    if (status === 200 && typeof data.player === "string" && setPlayerId(data.player)) {
+      await adoptAccount();
+      await syncEntitlements();
+      return { ok: true };
+    }
+    return { ok: false, message: typeof data.message === "string" ? data.message : "Could not restore right now. Try again later." };
+  } catch { return { ok: false, message: "Could not reach the shop. Check your connection." }; }
 }

@@ -7,5 +7,5 @@ export function GET(request: Request): Promise<Response> | Response {
   const ps = paystackFromEnv();
   if (!ps) return json(503, { error: "shop not configured" });
   const ref = new URL(request.url).searchParams.get("ref");
-  return withStore((store) => confirmPurchase(store, ps, ref));
+  return withStore((store) => confirmPurchase(store, ps, ref), undefined, { request, bucket: "purchase" });
 }

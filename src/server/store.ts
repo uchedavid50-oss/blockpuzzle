@@ -17,6 +17,12 @@ export interface Store {
   hset(key: string, field: string, value: string): Promise<void>;
   hmget(key: string, fields: string[]): Promise<(string | null)[]>;
   hkeys(key: string): Promise<string[]>;
+  hdel(key: string, field: string): Promise<void>;
+  del(key: string): Promise<void>;
+  /** Set membership, one atomic step per call: two writers adding different members never lose one. */
+  sadd(key: string, member: string): Promise<void>;
+  srem(key: string, member: string): Promise<void>;
+  smembers(key: string): Promise<string[]>;
   /** Adds to a counter and returns the new value. */
   incr(key: string, by?: number): Promise<number>;
   /** Approximate distinct counting (a HyperLogLog): stores no member, so nothing can be read back. */
@@ -65,6 +71,15 @@ export class MemoryStore implements Store {
     return fields.map((f) => this.h.get(key)?.get(f) ?? null);
   }
   async hkeys(key: string): Promise<string[]> { return [...(this.h.get(key)?.keys() ?? [])]; }
+  async hdel(key: string, field: string): Promise<void> { this.h.get(key)?.delete(field); }
+  async del(key: string): Promise<void> { this.kv.delete(key); this.z.delete(key); this.h.delete(key); this.s.delete(key); this.counters.delete(key); }
+  private s = new Map<string, Set<string>>();
+  async sadd(key: string, member: string): Promise<void> {
+    if (!this.s.has(key)) this.s.set(key, new Set());
+    this.s.get(key)!.add(member);
+  }
+  async srem(key: string, member: string): Promise<void> { this.s.get(key)?.delete(member); }
+  async smembers(key: string): Promise<string[]> { return [...(this.s.get(key) ?? [])]; }
   private counters = new Map<string, number>();
   async incr(key: string, by = 1): Promise<number> {
     const n = (this.counters.get(key) ?? 0) + by;
@@ -80,5 +95,5 @@ export class MemoryStore implements Store {
   async pfcount(key: string): Promise<number> { return this.pf.get(key)?.size ?? 0; }
   async mcount(keys: string[]): Promise<number[]> { return keys.map((k) => this.counters.get(k) ?? 0); }
   /** Test helper: every key this store holds, to check what is and is not kept. */
-  allKeys(): string[] { return [...this.kv.keys(), ...this.z.keys(), ...this.h.keys(), ...this.counters.keys(), ...this.pf.keys()]; }
+  allKeys(): string[] { return [...this.kv.keys(), ...this.z.keys(), ...this.h.keys(), ...this.s.keys(), ...this.counters.keys(), ...this.pf.keys()]; }
 }

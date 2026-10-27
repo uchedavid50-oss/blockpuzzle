@@ -19,7 +19,7 @@ import { award, awardAll, balance, savedUndos, startupRewards, takeSavedUndo } f
 import { ECONOMY, isPack } from "./economy";
 import { journeyStarsOwed, milestonesFor } from "./wallet";
 import { askName } from "./nameDialog";
-import { checkLeaderboard, fetchBoard, fetchStreaks, getPlayer, lb, postDaily, savePlayerName } from "./leaderboardClient";
+import { checkLeaderboard, fetchBoard, fetchStreaks, getPlayer, lb, postDaily, savePlayerName, startDaily } from "./leaderboardClient";
 import { settings } from "./settings";
 import type { MoveTuple } from "./verify";
 import { track } from "./analytics";
@@ -29,6 +29,8 @@ import { isAdFree } from "./entitlements";
 import { ownership, ownsSku } from "./ownership";
 import { applyConsent, getConsent } from "./consent";
 import { handleReturn, syncEntitlements } from "./shopClient";
+import { openAccount } from "./accountUI";
+import { account, shouldPrompt, signinOffered, startCloudSync } from "./cloudClient";
 import { drawMap, mapCancel, mapCovers, mapDown, mapMove, mapUi, mapUp, mapWheel, openMap, setMapHandlers } from "./mapView";
 
 interface State {
@@ -472,6 +474,8 @@ function trackModes(m: { lines: number; cells: number; points: number }): void {
       saveStats();
       // One payout per star, the first time each star on this level is earned.
       coinToast(awardAll("journey", journeyStarsOwed(state.level, state.stars)), `For your stars on level ${state.level}.`);
+      // A guest with some progress worth keeping is offered sign-in, once at each of these levels.
+      if ((state.level === 3 || state.level === 10) && shouldPrompt(`journey${state.level}`)) setTimeout(() => openAccount("journey"), 2500);
       sfx.praise(6);
       flash = 0.5;
       haptic([30, 30, 30, 30, 30, 30, 70]);
@@ -592,7 +596,7 @@ async function postMyScore(): Promise<void> {
       await refreshBoards();
       return;
     }
-    if (r.error === "bad name") { name = entered; problem = r.message ?? "That name is not allowed."; continue; }
+    if (r.error === "bad name" || r.error === "name taken") { name = entered; problem = r.message ?? "That name is not allowed."; continue; }
     if (r.error === "already submitted") {
       ui.lbMsg = "You already posted today.";
       savePosted(date, { rank: 0, total: 0, score: off.score, streak: 0 });
@@ -619,6 +623,10 @@ void checkLeaderboard().then(async () => {
     const packArrived = back?.ok === true && isPack(back.sku) && arrived > 0;
     if (back && !packArrived) toasts.push({ title: back.ok ? "Thank you!" : "Payment", desc: back.ok ? "Your purchase is ready." : back.message, t: 0 });
     coinToast(arrived, "Your coins have arrived. Thank you!", false, "PURCHASE");
+  }
+  if (signinOffered()) {
+    startCloudSync();
+    if (account()?.needsSignIn) openAccount("lost");
   }
 });
 
@@ -934,6 +942,8 @@ canvas.addEventListener("pointerup", (e) => {
     state.combo = res.combo;
     state.moves++;
     state.moveLog.push([shapeIndex(drag.shape), t.row, t.col]);
+    // Today's official attempt is timed by the server from its start, so posting a computed game fails.
+    if (state.daily && !state.practice && state.daily === today()) void startDaily(state.daily);
     state.lines += lines;
     // Zen and journey games do not feed the score records: their goals are not a score race.
     const scored = state.kind === "classic" || state.kind === "weekly";

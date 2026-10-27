@@ -15,6 +15,8 @@ const RATE_PER_MINUTE = 120;
 const ID_RE = /^[a-z0-9]{22}$/;
 const SRC_RE = /^[a-zA-Z0-9_-]{1,32}$/;
 const KNOWN = new Set<string>(EVENT_NAMES);
+/** Events the server records itself; a browser's own report of them is accepted but not counted. */
+const SERVER_ONLY = new Set<string>(["purchase_completed"]);
 const reply = (status: number, body: Record<string, unknown>): Reply => ({ status, body });
 
 interface Clean { name: EventName; counted: string[]; sum: number } // `counted` are the "prop:value" keys worth tallying
@@ -65,6 +67,7 @@ export async function collect(store: Store, body: unknown, now = new Date()): Pr
   const date = utcToday(now);
   const tally = new Map<string, number>();
   for (const c of cleaned) {
+    if (SERVER_ONLY.has(c.name)) continue;
     tally.set(`an:ev:${date}:${c.name}`, (tally.get(`an:ev:${date}:${c.name}`) ?? 0) + 1);
     for (const k of c.counted) tally.set(`an:ev:${date}:${c.name}:${k}`, (tally.get(`an:ev:${date}:${c.name}:${k}`) ?? 0) + 1);
     if (c.sum > 0) tally.set(`an:sum:${date}:${c.name}`, (tally.get(`an:sum:${date}:${c.name}`) ?? 0) + c.sum);
@@ -87,6 +90,20 @@ export async function collect(store: Store, body: unknown, now = new Date()): Pr
     for (const name of SUMMED_EVENTS) await store.expire(`an:sum:${date}:${name}`, KEEP);
   }
   return reply(200, { ok: true });
+}
+
+/**
+ * Counts an event the server itself witnessed (a confirmed payment), with the same keys the collector
+ * uses, so the admin page reads it the same way. Browsers cannot inflate these.
+ */
+export async function countServerEvent(store: Store, name: EventName, props: Record<string, string> = {}, now = new Date()): Promise<void> {
+  const date = utcToday(now);
+  const keys = [`an:ev:${date}:${name}`];
+  for (const [k, v] of Object.entries(props)) if (COUNTED_PROPS[k]?.includes(v)) keys.push(`an:ev:${date}:${name}:${k}:${v}`);
+  for (const k of keys) {
+    await store.incr(k, 1);
+    await store.expire(k, KEEP);
+  }
 }
 
 export interface DayStats { date: string; dau: number; events: Record<string, number>; byProp: Record<string, number>; sums: Record<string, number> }
@@ -133,9 +150,12 @@ export async function getStats(store: Store, now = new Date(), days = 14): Promi
   return reply(200, { generated: now.toISOString(), days: perDay, cohorts, sources });
 }
 
+/** The shortest admin token accepted: anything shorter could be guessed, so the admin page stays closed. */
+export const MIN_ADMIN_TOKEN = 24;
+
 /** Constant-time comparison, so the admin token cannot be guessed from response timing. */
 export function tokenOk(header: string | null, token: string | undefined): boolean {
-  if (!token || !header?.startsWith("Bearer ")) return false;
+  if (!token || token.length < MIN_ADMIN_TOKEN || !header?.startsWith("Bearer ")) return false;
   const given = header.slice(7);
   let diff = given.length ^ token.length;
   for (let i = 0; i < Math.max(given.length, token.length); i++) diff |= (given.charCodeAt(i) || 0) ^ (token.charCodeAt(i) || 0);

@@ -1,8 +1,25 @@
 // Validation rules for leaderboard input. Everything from the network is untrusted, so each field is
 // checked here before it reaches storage. Pure, so it is covered by tests.
 
-const BLOCKED = ["fuck", "shit", "cunt", "nigg", "fagg", "rape", "nazi", "hitler", "whore", "slut", "bitch", "dick", "cock", "porn", "kill yourself"];
-const SQUISH = (s: string): string => s.toLowerCase().replace(/[^a-z]/g, "");
+const BLOCKED = ["fuck", "shit", "cunt", "nigg", "fagg", "rape", "nazi", "hitler", "whore", "slut", "bitch", "dick", "cock", "porn", "kill yourself"]
+  .map((w) => w.replace(/[^a-z]/g, ""));
+/** Each blocked word as a pattern where any vowel may also be written as a digit ("f4ck", "sh1t"). */
+const BLOCKED_LOOSE = BLOCKED.map((w) => new RegExp(w.replace(/[aeiou]/g, "[aeiouy#]")));
+
+/** Digits and letters from other scripts that are used to dodge a word filter or copy someone's name. */
+const LOOKALIKE: Record<string, string> = {
+  "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "9": "g",
+  а: "a", в: "b", е: "e", к: "k", м: "m", н: "h", о: "o", р: "p", с: "c", т: "t", у: "y", х: "x", і: "i", ѕ: "s", ԁ: "d", ј: "j",
+  α: "a", β: "b", ε: "e", η: "n", ι: "i", κ: "k", ν: "v", ο: "o", ρ: "p", τ: "t", υ: "u", χ: "x",
+};
+
+/** The plain latin letters a name reads as: accents dropped, lookalikes and number swaps undone. */
+export function skeleton(name: string, oneAs: "i" | "l" = "i"): string {
+  return [...name.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase()]
+    .map((c) => (c === "1" ? oneAs : LOOKALIKE[c] ?? c))
+    .join("")
+    .replace(/[^a-z]/g, "");
+}
 
 /** A public nickname: 3-16 letters, digits, spaces, dots, dashes or underscores, with no blocked words. */
 export function cleanName(raw: unknown): string | null {
@@ -10,9 +27,19 @@ export function cleanName(raw: unknown): string | null {
   const name = raw.normalize("NFKC").replace(/\s+/g, " ").trim();
   if (name.length < 3 || name.length > 16) return null;
   if (!/^[\p{L}\p{N} ._-]+$/u.test(name)) return null;
-  const flat = SQUISH(name);
-  if (BLOCKED.some((w) => flat.includes(w.replace(/[^a-z]/g, "")))) return null;
+  const forms = [skeleton(name), skeleton(name, "l")];
+  if (BLOCKED.some((w) => forms.some((f) => f.includes(w)))) return null;
+  // Digits kept as a wildcard, so a digit standing in for a vowel is caught whichever vowel it hides.
+  const loose = [...name.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase()]
+    .map((c) => (/[0-9]/.test(c) ? "#" : LOOKALIKE[c] ?? c)).join("").replace(/[^a-z#]/g, "");
+  if (BLOCKED_LOOSE.some((re) => re.test(loose))) return null;
   return name;
+}
+
+/** What makes two names "the same" for ownership: lookalikes and case count as the same name. */
+export function nameKey(name: string): string {
+  const k = skeleton(name);
+  return k.length >= 3 ? k : name.normalize("NFKC").toLowerCase().replace(/\s+/g, "");
 }
 
 /** A player id is a random hex string the client makes once and keeps. */
@@ -34,3 +61,14 @@ export function dateAllowed(date: string, now: Date): boolean {
 }
 
 export const utcToday = (now: Date): string => now.toISOString().slice(0, 10);
+
+/**
+ * Whether date is a calendar day somewhere on Earth right now (time zones run from UTC-12 to UTC+14).
+ * Stricter than dateAllowed: a day's game can only be started or posted while that day exists, so
+ * nobody can post tomorrow's board early from a time zone they are not in.
+ */
+export function dateOpen(date: string, now: Date): boolean {
+  const earliest = utcToday(new Date(now.getTime() - 12 * 3_600_000));
+  const latest = utcToday(new Date(now.getTime() + 14 * 3_600_000));
+  return date >= earliest && date <= latest;
+}

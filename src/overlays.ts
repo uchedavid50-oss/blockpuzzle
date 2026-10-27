@@ -14,6 +14,8 @@ import { haptics } from "./haptics";
 import { forSale, formatPrice } from "./entitlements";
 import { ownership } from "./ownership";
 import { beginCheckout, restoreFromCode, syncEntitlements, transferCode } from "./shopClient";
+import { openAccount } from "./accountUI";
+import { account, signedIn, signinOffered } from "./cloudClient";
 import { applyConsent, getConsent, setConsent } from "./consent";
 import { track } from "./analytics";
 import { PALETTE, BADGES, COLLECTION_SIZE, THEMES, TILE_ORDER, applyTheme, collectionTiles, perkUndos, rankName, readStreak, stats, streakNow, themeIdx, themeUnlocked, today, unlocked, type Toast } from "./progress";
@@ -658,6 +660,32 @@ function navButtons(cw: number): { page: "themes" | "coins" | "shop"; label: str
   const step = (cw - 32) / list.length;
   return list.map((b, i) => ({ ...b, x: -cw / 2 + 16 + step * (i + 0.5), w: Math.min(160, step - 10) }));
 }
+const ACCT_Y = 104; // the account row on the main page: 68 tall
+function drawAccountRow(cw: number): void {
+  const a = account();
+  ctx.fillStyle = signedIn() ? "rgba(31,214,180,0.12)" : "rgba(255,194,31,0.16)";
+  ctx.beginPath();
+  ctx.roundRect(-cw / 2 + 16, ACCT_Y, cw - 32, 68, 14);
+  ctx.fill();
+  ctx.textAlign = "left";
+  ctx.fillStyle = COLORS.text;
+  ctx.font = `800 15px ${ROUND}`;
+  ctx.fillText(signedIn() ? "Progress saved" : a?.needsSignIn ? "Sign in again" : "Save your progress", -cw / 2 + 28, ACCT_Y + 24, cw - 150);
+  ctx.fillStyle = COLORS.dim;
+  ctx.font = `500 11.5px ${ROUND}`;
+  ctx.fillText(signedIn() ? `Signed in as ${a!.label}` : "Keep it if you lose your phone", -cw / 2 + 28, ACCT_Y + 46, cw - 150);
+  candyButton(cw / 2 - 66, ACCT_Y + 34, 92, 36, signedIn() ? "Account" : "Sign in", signedIn() ? "violet" : "gold", 0, 14);
+}
+
+/** Checkout, offering sign-in first to a guest so a purchase is never tied to one phone. */
+function checkout(sku: Parameters<typeof beginCheckout>[0], note: (s: string) => void): void {
+  const go = (): void => {
+    ui.shopBusy = true; note("Opening checkout…");
+    void beginCheckout(sku, currency()).then((r) => { ui.shopBusy = false; note(r.ok ? "Opening checkout…" : r.message); });
+  };
+  if (signinOffered() && !signedIn()) openAccount("purchase", go); else go();
+}
+
 const coinRowY = (i: number): number => -240 + i * 64; // rows on the coin page: 58 tall
 const shopRowY = (i: number): number => -236 + i * 74;
 const toggleY = (i: number): number => -250 + i * 56;
@@ -718,6 +746,7 @@ export function drawSettings(dt: number): void {
     });
 
     for (const b of navButtons(cw)) candyButton(b.x, btnY, b.w, 40, b.label, b.kind, 0, 16);
+    if (signinOffered()) drawAccountRow(cw);
     ctx.textAlign = "center";
     ctx.fillStyle = COLORS.dim;
     ctx.font = `500 12px ${ROUND}`;
@@ -904,9 +933,7 @@ function coinTap(lx: number, ly: number, cw: number): void {
   if (coinPacksShown()) {
     for (let i = 0; i < COIN_PACKS.length; i++) {
       if (!inRow(1 + COIN_ITEMS.length + i) || !onButton || ui.shopBusy) continue;
-      ui.shopBusy = true;
-      ui.coinNote = "Opening checkout…";
-      void beginCheckout(COIN_PACKS[i]!.id, currency()).then((r) => { ui.shopBusy = false; ui.coinNote = r.ok ? "Opening checkout…" : r.message; });
+      checkout(COIN_PACKS[i]!.id, (n) => { ui.coinNote = n; });
       return;
     }
   }
@@ -941,7 +968,7 @@ function drawShop(cw: number): void {
   ctx.font = `500 11.5px ${ROUND}`;
   ctx.fillText(ui.shopNote || "Cosmetic only. Nothing here changes how the game plays.", 0, 190, cw - 40);
   ctx.font = `600 11px ${ROUND}`;
-  ctx.fillText("Restore code (tap to copy):", 0, 216, cw - 40);
+  ctx.fillText("Restore code (moves everything to a new device; tap to copy):", 0, 216, cw - 30);
   ctx.fillText(transferCode(), 0, 234, cw - 20);
   ctx.fillStyle = BRAND.violet;
   ctx.font = `700 12px ${ROUND}`;
@@ -969,6 +996,7 @@ export function settingsTap(lx: number, ly: number): boolean {
       }
       return false;
     }
+    if (signinOffered() && ly >= ACCT_Y && ly <= ACCT_Y + 68) { openAccount("settings"); haptics.tick(); return false; }
     const list = toggles();
     for (let i = 0; i < list.length; i++) {
       const y = toggleY(i);
@@ -1000,15 +1028,14 @@ export function settingsTap(lx: number, ly: number): boolean {
     for (let i = 0; i < items.length; i++) {
       const y = shopRowY(i);
       if (ly >= y && ly <= y + 66 && lx > cw / 2 - 118 && !ui.shopBusy) {
-        ui.shopBusy = true; ui.shopNote = "Opening checkout…";
-        void beginCheckout(items[i]!.sku, currency()).then((r) => { ui.shopBusy = false; ui.shopNote = r.ok ? "Opening checkout…" : r.message; });
+        checkout(items[i]!.sku, (n) => { ui.shopNote = n; });
         return false;
       }
     }
     if (ly >= 204 && ly <= 244) { void navigator.clipboard?.writeText(transferCode()).then(() => { ui.shopNote = "Code copied."; }, () => {}); return false; }
     if (ly >= 248 && ly <= 270) {
       const code = window.prompt("Paste your restore code");
-      if (code) void restoreFromCode(code).then((r) => { ui.shopNote = r.ok ? "Restored." : r.message; });
+      if (code) void restoreFromCode(code).then((r) => { ui.shopNote = r.ok ? "Restored. The old code no longer works." : r.message; });
       return false;
     }
   }

@@ -4,7 +4,7 @@
 import { createServer } from "node:http";
 import { MemoryStore, type Store } from "../src/server/store";
 import { postgresStore } from "../src/server/postgres";
-import { submitScore } from "../src/server/handlers";
+import { startDaily, submitScore } from "../src/server/handlers";
 import { RULES_VERSION } from "../src/verify";
 import { playBot } from "../src/solver";
 import * as health from "../api/health";
@@ -19,10 +19,27 @@ import * as purchase from "../api/purchase";
 import * as entitlements from "../api/entitlements";
 import * as webhook from "../api/paystack-webhook";
 import * as coinsApi from "../api/coins";
+import * as startApi from "../api/start";
+import * as transferApi from "../api/transfer";
+import * as paymentsApi from "../api/payments";
+import * as signinApi from "../api/signin";
+import * as saveApi from "../api/save";
 
-// Local development: pretend to be Paystack (the fake is refused on Vercel) and use a known admin token.
-process.env.PAYSTACK_FAKE = "1";
-process.env.ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "dev";
+// Local secrets (Paystack test keys and the like) live in .env.local, which is never committed.
+try { process.loadEnvFile(".env.local"); } catch { /* no local secrets: fine */ }
+// Local development: use Paystack's test mode when a test key is set, otherwise pretend to be Paystack
+// (the fake is refused on Vercel). A live key is never used locally. And a known admin token.
+const key = process.env.PAYSTACK_SECRET_KEY ?? "";
+if (!key.startsWith("sk_test_")) {
+  delete process.env.PAYSTACK_SECRET_KEY;
+  process.env.PAYSTACK_FAKE = "1";
+}
+// The server refuses admin tokens shorter than 24 characters, so the local one is long too.
+process.env.ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "local-dev-admin-token-0000";
+// Sign-in locally: email codes are printed here instead of sent, unless a Resend key is in .env.local.
+// Google sign-in works locally only with a GOOGLE_CLIENT_ID that lists http://localhost:5173 as an origin.
+process.env.AUTH_SECRET = process.env.AUTH_SECRET ?? "local-dev-auth-secret-00000000";
+if (!process.env.RESEND_API_KEY) process.env.EMAIL_FAKE = "1";
 
 // STORE=postgres runs the same routes against Neon (DATABASE_URL) instead of memory, and skips seeding.
 const usePg = process.env.STORE === "postgres" && !!process.env.DATABASE_URL;
@@ -30,7 +47,7 @@ const store: Store = usePg ? postgresStore(process.env.DATABASE_URL!) : new Memo
 (globalThis as { __blockpuzzleStore?: Store }).__blockpuzzleStore = store;
 
 type Route = { GET?: (r: Request) => Response | Promise<Response>; POST?: (r: Request) => Response | Promise<Response> };
-const routes: Record<string, Route> = { "/api/health": health, "/api/submit": submit, "/api/rename": rename, "/api/board": board, "/api/streaks": streaks, "/api/collect": collectApi, "/api/stats": statsApi, "/api/checkout": checkout, "/api/purchase": purchase, "/api/entitlements": entitlements, "/api/paystack-webhook": webhook, "/api/coins": coinsApi };
+const routes: Record<string, Route> = { "/api/health": health, "/api/submit": submit, "/api/rename": rename, "/api/board": board, "/api/streaks": streaks, "/api/collect": collectApi, "/api/stats": statsApi, "/api/checkout": checkout, "/api/purchase": purchase, "/api/entitlements": entitlements, "/api/paystack-webhook": webhook, "/api/coins": coinsApi, "/api/start": startApi, "/api/transfer": transferApi, "/api/payments": paymentsApi, "/api/signin": signinApi, "/api/save": saveApi };
 
 // A few fake players with real, verified games, so the board has something on it.
 const today = new Date().toISOString().slice(0, 10);
@@ -43,7 +60,9 @@ for (const [name, tag, maxMoves] of usePg ? [] : seedPlayers) {
     const date = day(off);
     const moveLog: [number, number, number][] = [];
     playBot({ seed: date, maxMoves, moveLog });
-    await submitScore(store, { v: RULES_VERSION, player: id, name, date, moves: moveLog });
+    // Each seeded game is played as if at noon on its own day, started an hour before it was posted.
+    await startDaily(store, { player: id, date }, new Date(`${date}T11:00:00Z`));
+    await submitScore(store, { v: RULES_VERSION, player: id, name, date, moves: moveLog }, new Date(`${date}T12:00:00Z`));
   }
 }
 console.log(usePg ? "using Neon Postgres, no seed data" : `seeded ${seedPlayers.length} players for ${today}`);

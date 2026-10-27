@@ -30,7 +30,7 @@
 </head>
 <body>
 <h1>Block Puzzle · Admin</h1>
-<p class="note">Anonymous, aggregate numbers only. There are no individual players or events stored here.</p>
+<p class="note">Analytics are anonymous, aggregate numbers only. Payments list each confirmed payment by its anonymous player id (no email or other personal data).</p>
 <form id="f">
   <input id="token" type="password" placeholder="Admin token" autocomplete="off" required />
   <button type="submit">Load</button>
@@ -43,6 +43,14 @@
   <h2>Where players came from</h2><div class="scroll"><table id="sources"></table></div>
   <h2>Ads and purchases (14 days)</h2><div class="scroll"><table id="money"></table></div>
   <h2>Coins (14 days)</h2><div class="scroll"><table id="coins"></table></div>
+  <h2>Payments</h2>
+  <form id="pf">
+    <input id="pq" placeholder="Player id or reference (bp_…), empty for recent" autocomplete="off" />
+    <button type="submit">Search</button>
+  </form>
+  <p class="note" id="pnote"></p>
+  <div class="scroll"><table id="ptotals"></table></div>
+  <div class="scroll" style="margin-top:10px"><table id="payments"></table></div>
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -92,7 +100,33 @@ async function load(token) {
     ...ITEMS.map((i) => ["Bought with coins · " + i, by("coins_spent.item." + i)]),
     ...PACKS.map((p) => ["Coin packs sold · " + p, by("purchase_completed.sku." + p)])]);
   $("out").hidden = false;
+  await loadPayments(token, "");
 }
+// Amounts arrive in minor units (kobo, cents).
+const money = (minor, cur) => (cur === "NGN" ? "₦" : cur === "USD" ? "$" : cur + " ") + (minor / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+async function loadPayments(token, q) {
+  const p = new URLSearchParams();
+  if (/^bp_/.test(q)) p.set("ref", q); else if (q) p.set("player", q); else p.set("days", "30");
+  const r = await fetch("/api/payments?" + p, { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
+  if (r.status === 401) throw new Error("Wrong token, or no admin token is set on the server.");
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    $("pnote").textContent = d.error ? "No result: " + d.error + "." : "The server answered " + r.status + ".";
+    table($("ptotals"), ["Currency"], []); table($("payments"), ["Time"], []);
+    return;
+  }
+  $("pnote").textContent = d.account ? "Account now lives on " + d.account + (d.account !== q ? " (moved from " + q + ")" : "") + "."
+    : d.days ? "Last " + d.days + " days" + (d.truncated ? " (only the newest are totalled)" : "") + "." : "";
+  table($("ptotals"), ["Currency", "Payments", "Gross", "Refunded", "Disputed", "Net"],
+    d.totals.map((t) => [t.currency, t.count, money(t.gross, t.currency), money(t.refunded, t.currency), money(t.disputed, t.currency), money(t.net, t.currency)]));
+  table($("payments"), ["Time (UTC)", "Reference", "Player", "Item", "Amount", "Status"],
+    d.payments.map((x) => [x.paidAt.slice(0, 16).replace("T", " "), x.reference, x.account !== x.player ? x.player + " → " + x.account : x.player, x.sku, money(x.amount, x.currency),
+      x.status + (x.history && x.history.length ? " " + x.history[x.history.length - 1].at.slice(0, 10) : "")]));
+}
+$("pf").addEventListener("submit", (e) => {
+  e.preventDefault();
+  loadPayments($("token").value.trim(), $("pq").value.trim()).catch((err) => { $("pnote").textContent = err.message; });
+});
 $("f").addEventListener("submit", (e) => {
   e.preventDefault();
   const t = $("token").value.trim();

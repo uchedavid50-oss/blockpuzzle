@@ -8,6 +8,7 @@
 //     the claim takes the whole balance with a single atomic decrement, and each claim id is
 //     answered from a record afterwards, so a retry gets the same answer and nothing new.
 
+import { isRetired } from "./accounts.js";
 import type { Reply } from "./handlers.js";
 import { isPlayerId } from "./rules.js";
 import type { Store } from "./store.js";
@@ -39,6 +40,7 @@ export async function claimCoins(store: Store, body: unknown): Promise<Reply> {
   const b = (body ?? {}) as { player?: unknown; claim?: unknown };
   if (!isPlayerId(b.player)) return reply(400, { error: "bad player" });
   if (typeof b.claim !== "string" || !CLAIM_RE.test(b.claim)) return reply(400, { error: "bad claim" });
+  if (await isRetired(store, b.player)) return reply(410, { error: "moved" });
   const record = `claim:${b.player}:${b.claim}`;
 
   if (!(await store.setNx(record, "pending", 30 * DAY))) {

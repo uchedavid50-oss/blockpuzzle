@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { playBot } from "../solver";
 import { RULES_VERSION, type MoveTuple } from "../verify";
-import { getBoard, getStreaks, renamePlayer, submitScore } from "./handlers";
+import { getBoard, getStreaks, renamePlayer, startDaily, submitScore } from "./handlers";
 import { RedisStore } from "./redis";
 import { MemoryStore, type Store } from "./store";
 
@@ -13,8 +13,12 @@ function botGame(date: string, maxMoves: number): { moves: MoveTuple[]; score: n
   const run = playBot({ seed: date, maxMoves, moveLog });
   return { moves: moveLog, score: run.score };
 }
-const submit = (store: Store, n: number, name: string, game: { moves: MoveTuple[] }, date = "2026-10-19", now = NOW) =>
-  submitScore(store, { v: RULES_VERSION, player: id(n), name, date, moves: game.moves }, now);
+const HOUR = 3_600_000;
+/** Starts the day's attempt an hour before posting it, as a real game would. */
+async function submit(store: Store, n: number, name: string, game: { moves: MoveTuple[] }, date = "2026-10-19", now = NOW) {
+  await startDaily(store, { player: id(n), date }, new Date(now.getTime() - HOUR));
+  return submitScore(store, { v: RULES_VERSION, player: id(n), name, date, moves: game.moves }, now);
+}
 
 /** Runs the same flow against any store, so memory and Redis must behave identically. */
 async function flow(store: Store): Promise<void> {
@@ -51,6 +55,7 @@ describe("leaderboard handlers (memory store)", () => {
     const store = new MemoryStore();
     const g = botGame("2026-10-19", 20);
     const ok = { v: RULES_VERSION, player: id(7), name: "Cleo", date: "2026-10-19", moves: g.moves };
+    await startDaily(store, { player: id(7), date: "2026-10-19" }, new Date(NOW.getTime() - HOUR));
     expect((await submitScore(store, { ...ok, v: RULES_VERSION + 1 }, NOW)).status).toBe(409);
     expect((await submitScore(store, { ...ok, player: "nope" }, NOW)).status).toBe(400);
     expect((await submitScore(store, { ...ok, name: "<b>x</b>" }, NOW)).status).toBe(400);
@@ -148,6 +153,11 @@ function fakeUpstash(): typeof fetch {
       case "HSET": await mem.hset(s(0), s(1), s(2)); result = 1; break;
       case "HMGET": result = await mem.hmget(s(0), a.slice(1).map(String)); break;
       case "HKEYS": result = await mem.hkeys(s(0)); break;
+      case "HDEL": await mem.hdel(s(0), s(1)); result = 1; break;
+      case "DEL": await mem.del(s(0)); result = 1; break;
+      case "SADD": await mem.sadd(s(0), s(1)); result = 1; break;
+      case "SREM": await mem.srem(s(0), s(1)); result = 1; break;
+      case "SMEMBERS": result = await mem.smembers(s(0)); break;
       case "INCRBY": result = await mem.incr(s(0), Number(a[1])); break;
       case "PFADD": await mem.pfadd(s(0), s(1)); result = 1; break;
       case "PFCOUNT": result = await mem.pfcount(s(0)); break;

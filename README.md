@@ -3,7 +3,7 @@
 An original 8×8 drag-and-drop block puzzle. Drag pieces from the tray onto the board and clear
 rows, columns and 2×4 regions. No rotating, no timer, no ads, no backend.
 
-**Play it: https://blockpuzzle-three.vercel.app** (works offline and installs to your home screen)
+**Play it: https://bunblocks.app** (works offline and installs to your home screen)
 
 <p>
   <img src="docs/screens/gameplay.png" width="220" alt="Gameplay">
@@ -49,8 +49,13 @@ every colour), a calmer-visuals option, and a theme picker that includes limited
 Post your first daily attempt to a global board, and see the longest live daily streaks. It is
 optional, anonymous and verified: you pick a public nickname (no account, no personal data), and the
 server never trusts a score. Your game sends its list of moves and the server replays them with the
-same rules code, so only a legal game can score. (That proves a game was legal, not that a human played
-it.) Streaks are counted from the days you post.
+same rules code, so only a legal game can score. Beyond that, the server times each official attempt from
+its first move (the game tells it when you start, so a score posts only if the daily was started online),
+refuses a game finished faster than a person can play, caps new players per network address per day, and
+only opens a day's board while that date exists somewhere on Earth. A nickname belongs to one player at a
+time (lookalike spellings count as the same name). Streaks are counted from the days you post.
+
+Every API route is rate-limited per address, and the streak board is worked out at most every 30 seconds.
 
 ## Privacy, ads and purchases
 
@@ -62,8 +67,25 @@ Everything here is off until configured, and none of it can change the rules or 
   `VITE_ANALYTICS_ENDPOINT`.
 - **Shop** (Paystack, NGN): shown only when `PAYSTACK_SECRET_KEY` is set. Prices are decided and payments
   verified on the server; set the webhook to `/api/paystack-webhook`. `PAYSTACK_USD=1` enables USD.
+  A test key (`sk_test_`) is refused on the production deployment, because Paystack's test cards are
+  public; use it on Preview, or set `PAYSTACK_ALLOW_TEST=1` to override on purpose.
   Items are cosmetic or remove ads: no-interruptions, two theme packs, clear effects, and a supporter
-  bundle that adds a star beside your name on the boards. A restore code moves purchases to another device.
+  bundle that adds a star beside your name on the boards. A restore code *moves* the account (purchases,
+  uncollected coins, name, streak) to another device and stops working on the old one, so a code cannot
+  be shared to unlock purchases. Refunds and chargebacks (`refund.processed`, `charge.dispute.create`
+  webhooks) take the purchase back; a refunded coin pack is taken from future coins if already collected.
+  Sales on the admin page are counted by the server when a payment is confirmed, not reported by browsers.
+- **Sign-in and cloud save** (optional for players, off until configured): `AUTH_SECRET` (at least 24
+  characters; it keys the email hashes, so never change it once players have signed in) plus either or
+  both of: email codes via Resend (`RESEND_API_KEY`, `EMAIL_FROM` such as `Block Puzzle <play@yourdomain>`
+  on a domain verified in Resend), and Google (`GOOGLE_CLIENT_ID`, a Web OAuth client whose authorised
+  JavaScript origins list the site). A signed-in device keeps a cloud save that merges with the account's
+  (counters add up, bests take the higher), so two phones never overwrite each other. Signing in on a phone
+  that played as a guest brings its purchases and coins into the account. Only a keyed hash of the email and
+  a masked label (`ad***@gmail.com`) are stored. The game offers sign-in in Settings, before a checkout and
+  after journey levels 3 and 10. Locally, `npm run dev:api` prints email codes to its terminal.
+- **Admin page**: `ADMIN_TOKEN` must be at least 24 characters (shorter tokens keep the page closed);
+  wrong guesses are rate-limited.
 - **Ads**: loaded only when `VITE_ADSENSE_CLIENT` (a `ca-pub-` id) is set at build time; `VITE_ADSENSE_TEST=1`
   uses Google's test mode. A rewarded "watch an ad to undo" appears on game over (never in the daily, weekly
   or a challenge) and an interstitial may precede "Play again" (every 3 runs, 5 minute cooldown, never for

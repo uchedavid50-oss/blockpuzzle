@@ -46,6 +46,11 @@ export class RedisStore implements Store {
   }
   async hset(key: string, field: string, value: string): Promise<void> { await this.cmd("HSET", key, field, value); }
   async hkeys(key: string): Promise<string[]> { return ((await this.cmd("HKEYS", key)) as string[] | null) ?? []; }
+  async hdel(key: string, field: string): Promise<void> { await this.cmd("HDEL", key, field); }
+  async del(key: string): Promise<void> { await this.cmd("DEL", key); }
+  async sadd(key: string, member: string): Promise<void> { await this.cmd("SADD", key, member); }
+  async srem(key: string, member: string): Promise<void> { await this.cmd("SREM", key, member); }
+  async smembers(key: string): Promise<string[]> { return ((await this.cmd("SMEMBERS", key)) as string[] | null) ?? []; }
   async incr(key: string, by = 1): Promise<number> { return Number(await this.cmd("INCRBY", key, by)); }
   async pfadd(key: string, member: string): Promise<void> { await this.cmd("PFADD", key, member); }
   async pfcount(key: string): Promise<number> { return Number(await this.cmd("PFCOUNT", key)); }

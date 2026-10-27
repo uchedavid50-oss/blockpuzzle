@@ -63,7 +63,10 @@ Coins (src/economy.ts numbers, src/wallet.ts rules, src/coins.ts storage, src/se
 - Ad coins only after `claimReward` returns true (coins.ts `watchAdForCoins`), capped per day.
 
 The one backend is the leaderboard (api/ routes and src/server/), kept deliberately small:
-- Anonymous. A random player id and a public nickname; no accounts and no personal data.
+- A random player id and a public nickname. Sign-in is optional and exists because I asked for it
+  (src/server/signin.ts, src/cloudsave.ts, src/cloudClient.ts, src/accountUI.ts): email code or Google,
+  linked to the player id. Store only a keyed hash of the email and a masked label, never the address.
+  Playing never requires it. The cloud save merges three-way (cloudsave.ts) and must never overwrite.
 - Scores are never trusted. The client sends its list of moves and the server replays them with the
   same board.ts, pieces.ts and rng.ts, so only a legal game can score. Bump RULES_VERSION in
   src/verify.ts whenever scoring, the rules or the piece set change.

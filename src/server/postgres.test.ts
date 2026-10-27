@@ -49,4 +49,20 @@ describe.each(backends)("Store contract: %s", { timeout: 60_000 }, (_name, make)
     await s.pfadd(p + "d", "u1"); await s.pfadd(p + "d", "u1"); await s.pfadd(p + "d", "u2");
     expect(await s.pfcount(p + "d")).toBe(2);
   });
+
+  it("sets, field and key deletion", async () => {
+    const s = make();
+    await s.sadd(p + "s", "a"); await s.sadd(p + "s", "a"); await s.sadd(p + "s", "b");
+    expect((await s.smembers(p + "s")).sort()).toEqual(["a", "b"]);
+    await s.srem(p + "s", "a");
+    expect(await s.smembers(p + "s")).toEqual(["b"]);
+    await s.hset(p + "h2", "x", "1"); await s.hset(p + "h2", "y", "2");
+    await s.hdel(p + "h2", "x");
+    expect(await s.hkeys(p + "h2")).toEqual(["y"]);
+    await s.set(p + "k", "v");
+    await s.del(p + "k"); await s.del(p + "h2"); await s.del(p + "s");
+    expect(await s.get(p + "k")).toBeNull();
+    expect(await s.hkeys(p + "h2")).toEqual([]);
+    expect(await s.smembers(p + "s")).toEqual([]);
+  });
 });

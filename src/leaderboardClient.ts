@@ -30,13 +30,19 @@ export function setPlayerId(id: string): boolean {
   try { localStorage.setItem(PLAYER_KEY, JSON.stringify({ id, name: getPlayer().name })); return true; } catch { return false; }
 }
 
+/** Starts over with a fresh id (used when this device's account was moved to another device). */
+export function resetPlayer(): void {
+  const name = getPlayer().name;
+  try { localStorage.setItem(PLAYER_KEY, JSON.stringify({ id: randomId(), name })); } catch { /* ignore */ }
+}
+
 export function savePlayerName(name: string): void {
   const p = getPlayer();
   try { localStorage.setItem(PLAYER_KEY, JSON.stringify({ ...p, name })); } catch { /* ignore */ }
 }
 
 /** True once /api/health says a leaderboard is configured. The UI shows leaderboard controls only then. */
-export const lb = { available: false, analytics: false, shop: false, currencies: ["NGN"] as string[] };
+export const lb = { available: false, analytics: false, shop: false, currencies: ["NGN"] as string[], signin: { email: false, google: null as string | null } };
 
 export async function call(path: string, init?: RequestInit): Promise<Response> {
   const ctl = new AbortController();
@@ -48,11 +54,12 @@ export async function call(path: string, init?: RequestInit): Promise<Response> 
 export async function checkLeaderboard(): Promise<void> {
   try {
     const r = await call("/api/health");
-    const d = r.ok ? ((await r.json()) as { leaderboard?: boolean; analytics?: boolean; shop?: boolean; currencies?: string[] }) : {};
+    const d = r.ok ? ((await r.json()) as { leaderboard?: boolean; analytics?: boolean; shop?: boolean; currencies?: string[]; signin?: { email?: unknown; google?: unknown } }) : {};
     lb.available = d.leaderboard === true;
     lb.analytics = d.analytics === true;
     lb.shop = d.shop === true;
     if (Array.isArray(d.currencies)) lb.currencies = d.currencies.filter((c) => typeof c === "string");
+    lb.signin = { email: d.signin?.email === true, google: typeof d.signin?.google === "string" ? d.signin.google : null };
   } catch { lb.available = false; lb.analytics = false; lb.shop = false; }
 }
 
@@ -63,6 +70,22 @@ export type PostResult =
 async function post(path: string, body: unknown): Promise<{ status: number; data: Record<string, unknown> }> {
   const r = await call(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return { status: r.status, data: (await r.json().catch(() => ({}))) as Record<string, unknown> };
+}
+
+const STARTED_KEY = (date: string): string => `blockpuzzle.started.${date}`;
+let starting = false;
+/**
+ * Tells the server the official attempt at a daily has begun, so it can tell a real game from one
+ * computed somewhere and posted in seconds. Called on each move until the server has it.
+ */
+export async function startDaily(date: string): Promise<void> {
+  if (starting || !lb.available) return;
+  try { if (localStorage.getItem(STARTED_KEY(date)) === "1") return; } catch { /* ask anyway */ }
+  starting = true;
+  try {
+    const { status } = await post("/api/start", { player: getPlayer().id, date });
+    if (status === 200) { try { localStorage.setItem(STARTED_KEY(date), "1"); } catch { /* ignore */ } }
+  } catch { /* offline: the next move tries again */ } finally { starting = false; }
 }
 
 /** Posts a finished first attempt. The server replays the moves and works out the score itself. */
@@ -83,14 +106,16 @@ export interface StreakData { me: { rank: number; streak: number } | null; top: 
 
 export async function fetchBoard(date: string): Promise<BoardData | null> {
   try {
-    const r = await call(`/api/board?date=${encodeURIComponent(date)}&player=${getPlayer().id}`);
+    // The id travels in a header, not the URL (URLs end up in logs); `me=1` keeps shared caches from
+    // answering with someone else's copy.
+    const r = await call(`/api/board?date=${encodeURIComponent(date)}&me=1`, { headers: { "X-Player": getPlayer().id } });
     return r.ok ? ((await r.json()) as BoardData) : null;
   } catch { return null; }
 }
 
 export async function fetchStreaks(): Promise<StreakData | null> {
   try {
-    const r = await call(`/api/streaks?player=${getPlayer().id}`);
+    const r = await call("/api/streaks?me=1", { headers: { "X-Player": getPlayer().id } });
     return r.ok ? ((await r.json()) as StreakData) : null;
   } catch { return null; }
 }

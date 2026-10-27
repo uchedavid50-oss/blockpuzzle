@@ -86,10 +86,17 @@ export const allowedCurrencies = (env: Record<string, string | undefined> = proc
   env.PAYSTACK_USD === "1" ? ["NGN", "USD"] : ["NGN"];
 
 let fake: FakePaystack | null = null;
-/** The configured provider, or null when payments are not set up (so the shop stays hidden). */
+/**
+ * The configured provider, or null when payments are not set up (so the shop stays hidden).
+ * A test key is refused on the production deployment: Paystack's test cards are public, so a test
+ * key there would let anyone "pay" for real items. Set PAYSTACK_ALLOW_TEST=1 to override on purpose.
+ */
 export function paystackFromEnv(env: Record<string, string | undefined> = process.env): Paystack | null {
   if (env.PAYSTACK_FAKE === "1" && !env.VERCEL) return (fake ??= new FakePaystack());
-  return env.PAYSTACK_SECRET_KEY ? new PaystackHttp(env.PAYSTACK_SECRET_KEY) : null;
+  const key = env.PAYSTACK_SECRET_KEY;
+  if (!key) return null;
+  if (key.startsWith("sk_test_") && env.VERCEL_ENV === "production" && env.PAYSTACK_ALLOW_TEST !== "1") return null;
+  return new PaystackHttp(key);
 }
 
 /** Paystack signs each webhook with an HMAC-SHA512 of the raw body, keyed by the secret key. */

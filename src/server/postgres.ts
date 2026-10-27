@@ -16,6 +16,7 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS bp_zset_score ON bp_zset (key, score DESC, member DESC)`,
   `CREATE TABLE IF NOT EXISTS bp_hash (key text NOT NULL, field text NOT NULL, value text NOT NULL, PRIMARY KEY (key, field))`,
   `CREATE TABLE IF NOT EXISTS bp_counter (key text PRIMARY KEY, n bigint NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS bp_set (key text NOT NULL, member text NOT NULL, PRIMARY KEY (key, member))`,
   `CREATE TABLE IF NOT EXISTS bp_distinct (key text NOT NULL, h text NOT NULL, PRIMARY KEY (key, h))`,
   `CREATE TABLE IF NOT EXISTS bp_expiry (key text PRIMARY KEY, expires_at timestamptz NOT NULL)`,
 ];
@@ -55,7 +56,7 @@ export class PostgresStore implements Store {
     const gone = await this.run(`DELETE FROM bp_expiry WHERE expires_at < now() RETURNING key`);
     const keys = gone.map((r) => String(r.key));
     if (keys.length === 0) return;
-    for (const t of ["bp_zset", "bp_hash", "bp_counter", "bp_distinct"]) await this.run(`DELETE FROM ${t} WHERE key = ANY($1)`, [keys]);
+    for (const t of ["bp_zset", "bp_hash", "bp_set", "bp_counter", "bp_distinct"]) await this.run(`DELETE FROM ${t} WHERE key = ANY($1)`, [keys]);
   }
   async zadd(key: string, score: number, member: string): Promise<void> {
     await this.run(`INSERT INTO bp_zset (key, member, score) VALUES ($1, $2, $3) ON CONFLICT (key, member) DO UPDATE SET score = EXCLUDED.score`, [key, member, score]);
@@ -92,6 +93,21 @@ export class PostgresStore implements Store {
   }
   async hkeys(key: string): Promise<string[]> {
     return (await this.run(`SELECT field FROM bp_hash WHERE key = $1 ORDER BY field`, [key])).map((x) => String(x.field));
+  }
+  async hdel(key: string, field: string): Promise<void> {
+    await this.run(`DELETE FROM bp_hash WHERE key = $1 AND field = $2`, [key, field]);
+  }
+  async del(key: string): Promise<void> {
+    for (const t of ["bp_kv", "bp_zset", "bp_hash", "bp_set", "bp_counter", "bp_distinct", "bp_expiry"]) await this.run(`DELETE FROM ${t} WHERE key = $1`, [key]);
+  }
+  async sadd(key: string, member: string): Promise<void> {
+    await this.run(`INSERT INTO bp_set (key, member) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [key, member]);
+  }
+  async srem(key: string, member: string): Promise<void> {
+    await this.run(`DELETE FROM bp_set WHERE key = $1 AND member = $2`, [key, member]);
+  }
+  async smembers(key: string): Promise<string[]> {
+    return (await this.run(`SELECT member FROM bp_set WHERE key = $1`, [key])).map((x) => String(x.member));
   }
   async incr(key: string, by = 1): Promise<number> {
     const r = await this.run(`INSERT INTO bp_counter (key, n) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET n = bp_counter.n + EXCLUDED.n RETURNING n`, [key, by]);

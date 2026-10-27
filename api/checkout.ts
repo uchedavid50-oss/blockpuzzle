@@ -7,5 +7,5 @@ export async function POST(request: Request): Promise<Response> {
   if (!ps) return json(503, { error: "shop not configured" });
   let body: unknown;
   try { body = await readJson(request); } catch { return json(400, { error: "bad request" }); }
-  return withStore((store) => startCheckout(store, ps, body, new URL(request.url).origin));
+  return withStore((store) => startCheckout(store, ps, body, new URL(request.url).origin), undefined, { request, bucket: "checkout" });
 }
