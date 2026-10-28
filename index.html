@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-<title>Bun Blocks</title>
+<title>Bun Blocks – a free block puzzle game</title>
+<meta name="description" content="Bun Blocks is a free, original puzzle game. Fit pieces on the board, clear lines, beat the daily challenge and compete in the weekly cup." />
 <meta name="theme-color" content="#8a4dff" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -12,6 +13,9 @@
 <link rel="icon" href="/icon-192.png" />
 <style>
   html, body { margin: 0; height: 100%; background: #f3dcf6; overflow: hidden; overscroll-behavior: none; }
+  /* Plain links, small and out of the way, so people and crawlers can find the guide, privacy and contact pages. */
+  #site { position: fixed; left: 0; right: 0; bottom: 3px; z-index: 5; text-align: center; font: 600 11px system-ui, sans-serif; pointer-events: none; }
+  #site a { pointer-events: auto; color: rgba(60, 30, 110, 0.55); text-decoration: none; padding: 4px 6px; }
   canvas { display: block; touch-action: none; user-select: none; }
 </style>
 <!-- AdSense site verification. This only loads Google's script; no ad is shown unless the game asks for one (see src/adLoader.ts). -->
@@ -19,6 +23,7 @@
 </head>
 <body>
 <canvas id="game"></canvas>
+<nav id="site" aria-label="About this game"><a href="/how-to-play.html" target="_blank" rel="noopener">How to play</a><a href="/about.html" target="_blank" rel="noopener">About</a><a href="/privacy.html" target="_blank" rel="noopener">Privacy</a><a href="/contact.html" target="_blank" rel="noopener">Contact</a></nav>
 <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
