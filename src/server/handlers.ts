@@ -5,7 +5,7 @@ import { applyPlay, currentStreak, type StreakRec } from "../streak.js";
 import { RULES_VERSION, replay, type MoveTuple } from "../verify.js";
 import { claimName, isRetired } from "./accounts.js";
 import { tooManyNewPlayers } from "./limits.js";
-import { cleanName, dateAllowed, dateOpen, isDate, isPlayerId, utcToday } from "./rules.js";
+import { boardAllowed, boardOpen, cleanName, isBoardId, isDate, isPlayerId, isWeekId, utcToday } from "./rules.js";
 import type { Store } from "./store.js";
 
 export interface Reply { status: number; body: Record<string, unknown> }
@@ -16,6 +16,8 @@ const BOARD_SIZE = 25;
 /** No one places a piece faster than this on average over a whole game; a quicker game was not played by hand. */
 export const MIN_MS_PER_MOVE = 300;
 const startKey = (date: string, player: string): string => `start:${date}:${player}`;
+/** A day's markers can go after four days; a week's stay until well after the prizes are paid. */
+const keepFor = (id: string): number => (isWeekId(id) ? 12 * DAY : 4 * DAY);
 const MOVED = reply(410, { error: "moved", message: "This device's account was moved to another device." });
 const boardKey = (date: string): string => `lb:${date}`;
 
@@ -36,9 +38,9 @@ async function readStreak(store: Store, player: string): Promise<PlayerStreak | 
 export async function startDaily(store: Store, body: unknown, now = new Date()): Promise<Reply> {
   const b = (body ?? {}) as Record<string, unknown>;
   if (!isPlayerId(b.player)) return reply(400, { error: "bad player" });
-  if (!isDate(b.date) || !dateOpen(b.date, now)) return reply(400, { error: "bad date" });
+  if (!isBoardId(b.date) || !boardOpen(b.date, now)) return reply(400, { error: "bad date" });
   if (await isRetired(store, b.player)) return MOVED;
-  const fresh = await store.setNx(startKey(b.date, b.player), String(now.getTime()), 4 * DAY);
+  const fresh = await store.setNx(startKey(b.date, b.player), String(now.getTime()), keepFor(b.date));
   return reply(200, { ok: true, first: fresh });
 }
 
@@ -51,7 +53,7 @@ export async function submitScore(store: Store, body: unknown, now = new Date(),
   const b = (body ?? {}) as Record<string, unknown>;
   if (b.v !== RULES_VERSION) return reply(409, { error: "outdated", message: "Please reload the game to update it." });
   if (!isPlayerId(b.player)) return reply(400, { error: "bad player" });
-  if (!isDate(b.date) || !dateOpen(b.date, now)) return reply(400, { error: "bad date" });
+  if (!isBoardId(b.date) || !boardOpen(b.date, now)) return reply(400, { error: "bad date" });
   const name = cleanName(b.name);
   if (!name) return reply(400, { error: "bad name", message: "Use 3 to 16 letters, numbers or spaces, and keep it friendly." });
 
@@ -74,25 +76,30 @@ export async function submitScore(store: Store, body: unknown, now = new Date(),
   if (!(await claimName(store, player, name))) return reply(409, { error: "name taken", message: "Someone already uses that name. Try another." });
 
   // One official attempt per player per day: the first submission wins.
-  if (!(await store.setNx(`sub:${date}:${player}`, "1", 4 * DAY))) return reply(409, { error: "already submitted" });
+  if (!(await store.setNx(`sub:${date}:${player}`, "1", keepFor(date)))) return reply(409, { error: "already submitted" });
 
   await store.zadd(boardKey(date), result.score, player);
   await store.expire(boardKey(date), 45 * DAY);
 
-  const before = await readStreak(store, player);
-  const { rec } = applyPlay(before, date);
-  const next: PlayerStreak = { ...rec, best: Math.max(before?.best ?? 0, rec.n) };
-  await store.set(`streak:${player}`, JSON.stringify(next));
-  await store.zadd("lb:streak", next.n, player);
+  // Only a day's board feeds the daily streak; the Weekly Cup does not.
+  let streak = 0;
+  if (isDate(date)) {
+    const before = await readStreak(store, player);
+    const { rec } = applyPlay(before, date);
+    const next: PlayerStreak = { ...rec, best: Math.max(before?.best ?? 0, rec.n) };
+    await store.set(`streak:${player}`, JSON.stringify(next));
+    await store.zadd("lb:streak", next.n, player);
+    streak = next.n;
+  }
 
   const rank = ((await store.zrevrank(boardKey(date), player)) ?? 0) + 1;
-  return reply(200, { ok: true, score: result.score, rank, total: await store.zcard(boardKey(date)), streak: next.n, over: result.over });
+  return reply(200, { ok: true, score: result.score, rank, total: await store.zcard(boardKey(date)), streak, over: result.over });
 }
 
 /** Today's top scores, plus where the asking player stands. */
 export async function getBoard(store: Store, query: { date?: unknown; player?: unknown }, now = new Date()): Promise<Reply> {
   const date = query.date ?? utcToday(now);
-  if (!isDate(date) || !dateAllowed(date, now)) return reply(400, { error: "bad date" });
+  if (!isBoardId(date) || !boardAllowed(date, now)) return reply(400, { error: "bad date" });
   const key = boardKey(date);
   const top = await store.zrevrange(key, 0, BOARD_SIZE - 1);
   const names = await store.hmget("names", top.map((e) => e.member));

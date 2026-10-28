@@ -63,6 +63,7 @@ export const ui = {
   consentOn: false,
   consentT: 0,
   consentPress: null as { x: number; y: number } | null,
+  themePage: 0,
   settingsPage: "main" as "main" | "themes" | "shop" | "coins",
   shopNote: "",
   shopBusy: false,
@@ -75,6 +76,10 @@ export const ui = {
   lbPress: null as { x: number; y: number } | null,
   lbBoard: null as BoardData | null,
   lbStreaks: null as StreakData | null,
+  lbCup: null as BoardData | null,
+  lbCupId: "",
+  lbCupCanPost: false,
+  lbCupPosted: null as { rank: number; total: number; score: number } | null,
   lbLoading: false,
   lbMsg: "",
   lbCanPost: false, // today's first attempt is finished, verifiable and not yet posted
@@ -442,7 +447,7 @@ export function drawModes(dt: number): void {
         sub: off ? `Your result: ${off.score.toLocaleString("en-US")}${par ? ` \u00B7 par ${par}` : ""}. Replays are practice.` : `Same pieces for everyone${par ? ` \u00B7 par ${par}` : ""}.`,
         tag: streakNow() > 0 ? `\u{1F525} ${streakNow()}` : undefined, hot: !off,
       },
-      { icon: "\u26A1", name: `Weekly: ${wk.title}`, sub: wk.rule, tag: weeklyCompleted(weekId(t)) ? "\u2713 done" : undefined, hot: !weeklyCompleted(weekId(t)) },
+      { icon: "\u26A1", name: `Weekly: ${wk.title}`, sub: wk.rule, tag: weeklyCompleted(weekId(t)) ? "\u2713 done" : lb.available ? "\u{1F3C6} Cup" : undefined, hot: !weeklyCompleted(weekId(t)) },
       { icon: "\u{1F9ED}", name: "Journey", sub: `Level ${j.next} next \u00B7 ${stars} \u2605 earned` },
       { icon: "\u{1F33F}", name: "Zen", sub: "No game over. Relax and clear lines." },
       { icon: "\u{1F5C2}", name: "Daily archive", sub: "Replay the last two weeks of dailies." },
@@ -689,6 +694,8 @@ function checkout(sku: Parameters<typeof beginCheckout>[0], note: (s: string) =>
 const coinRowY = (i: number): number => -240 + i * 64; // rows on the coin page: 58 tall
 const shopRowY = (i: number): number => -236 + i * 74;
 const toggleY = (i: number): number => -250 + i * 56;
+const THEMES_PER_PAGE = 20;
+const themePages = (): number => Math.ceil(THEMES.length / THEMES_PER_PAGE);
 const themeCell = (i: number, cw: number): { x: number; y: number; w: number; h: number } => {
   const w = (cw - 32) / 4;
   return { x: -cw / 2 + 16 + (i % 4) * w, y: -240 + Math.floor(i / 4) * 84, w, h: 78 };
@@ -752,8 +759,10 @@ export function drawSettings(dt: number): void {
     ctx.font = `500 12px ${ROUND}`;
     ctx.fillText(ui.settingsNote, 0, 262, cw - 40);
   } else if (page === "themes") {
-    THEMES.forEach((t, i) => {
-      const c = themeCell(i, cw);
+    const first = ui.themePage * THEMES_PER_PAGE;
+    THEMES.slice(first, first + THEMES_PER_PAGE).forEach((t, k) => {
+      const i = first + k;
+      const c = themeCell(k, cw);
       const ok = themeUnlocked(i);
       const sel = themeIdx === i;
       ctx.fillStyle = sel ? "rgba(255,184,31,0.2)" : "rgba(138,77,255,0.07)";
@@ -786,6 +795,15 @@ export function drawSettings(dt: number): void {
     ctx.fillStyle = COLORS.dim;
     ctx.font = `500 12px ${ROUND}`;
     ctx.fillText(ui.settingsNote || "Tap a theme to wear it. Locked ones show how to earn them.", 0, 262, cw - 40);
+    if (themePages() > 1) {
+      ctx.fillStyle = BRAND.violet;
+      ctx.font = `800 20px ${ROUND}`;
+      ctx.fillText("\u2039", -70, 210);
+      ctx.fillText("\u203A", 70, 210);
+      ctx.fillStyle = COLORS.dim;
+      ctx.font = `700 12px ${ROUND}`;
+      ctx.fillText(`Page ${ui.themePage + 1} of ${themePages()}`, 0, 210);
+    }
   } else if (page === "coins") {
     drawCoinShop(cw);
   } else {
@@ -1013,8 +1031,14 @@ export function settingsTap(lx: number, ly: number): boolean {
       }
     }
   } else if (page === "themes") {
-    for (let i = 0; i < THEMES.length; i++) {
-      const c = themeCell(i, cw);
+    if (themePages() > 1 && ly >= 190 && ly <= 232 && Math.abs(lx) <= 100) {
+      ui.themePage = (ui.themePage + (lx < 0 ? -1 : 1) + themePages()) % themePages();
+      haptics.tick();
+      return false;
+    }
+    const first = ui.themePage * THEMES_PER_PAGE;
+    for (let i = first; i < Math.min(THEMES.length, first + THEMES_PER_PAGE); i++) {
+      const c = themeCell(i - first, cw);
       if (lx >= c.x && lx <= c.x + c.w && ly >= c.y && ly <= c.y + c.h) {
         if (themeUnlocked(i)) { applyTheme(i); ui.settingsNote = `Theme: ${THEMES[i]!.name}`; haptics.tick(); }
         else ui.settingsNote = THEMES[i]!.season ? `${THEMES[i]!.name} is available ${THEMES[i]!.season!.label}.` : `${requirement(i)} to unlock ${THEMES[i]!.name}.`;
@@ -1049,9 +1073,9 @@ export function lbLayout(): { k: number; cw: number } {
   const k = Math.min(1, (H - 24) / LB_H);
   return { k, cw: Math.min((W - 24) / k, 360) };
 }
-const LB_TABS = ["Today", "Streaks"] as const;
+const LB_TABS = ["Today", "Cup", "Streaks"] as const;
 const lbTabRect = (i: number, cw: number): { x: number; y: number; w: number; h: number } => {
-  const w = (cw - 48) / 2;
+  const w = (cw - 48) / 3;
   return { x: -cw / 2 + 24 + i * w, y: -250, w, h: 32 };
 };
 const LB_POST = { y: 172, h: 44 };
@@ -1091,7 +1115,12 @@ export function drawLeaderboard(dt: number): void {
     rows = ui.lbBoard.top.map((t) => ({ rank: t.rank, name: t.supporter ? `\u2605 ${t.name}` : t.name, value: t.score.toLocaleString("en-US"), you: t.you }));
     header = `${today()} \u00B7 ${ui.lbBoard.total.toLocaleString("en-US")} player${ui.lbBoard.total === 1 ? "" : "s"}`;
     if (ui.lbBoard.me && !rows.some((r) => r.you)) pinned = { rank: ui.lbBoard.me.rank, name: "You", value: ui.lbBoard.me.score.toLocaleString("en-US"), you: true };
-  } else if (ui.lbTab === 1 && ui.lbStreaks) {
+  } else if (ui.lbTab === 1 && ui.lbCup) {
+    rows = ui.lbCup.top.map((t) => ({ rank: t.rank, name: t.supporter ? `\u2605 ${t.name}` : t.name, value: t.score.toLocaleString("en-US"), you: t.you }));
+    const left = Math.max(0, Math.ceil((new Date(`${addDays(ui.lbCupId.slice(2), 7)}T00:00:00Z`).getTime() - Date.now()) / 86_400_000));
+    header = `Weekly Cup \u00B7 ${ui.lbCup.total.toLocaleString("en-US")} player${ui.lbCup.total === 1 ? "" : "s"} \u00B7 ${left} day${left === 1 ? "" : "s"} left`;
+    if (ui.lbCup.me && !rows.some((r) => r.you)) pinned = { rank: ui.lbCup.me.rank, name: "You", value: ui.lbCup.me.score.toLocaleString("en-US"), you: true };
+  } else if (ui.lbTab === 2 && ui.lbStreaks) {
     rows = ui.lbStreaks.top.map((t) => ({ rank: t.rank, name: t.supporter ? `\u2605 ${t.name}` : t.name, value: `${t.streak} day${t.streak === 1 ? "" : "s"}`, you: t.you }));
     header = "Longest live daily streaks";
     if (ui.lbStreaks.me && !rows.some((r) => r.you)) pinned = { rank: ui.lbStreaks.me.rank, name: "You", value: `${ui.lbStreaks.me.streak} days`, you: true };
@@ -1145,17 +1174,18 @@ export function drawLeaderboard(dt: number): void {
     ctx.textAlign = "center";
     ctx.fillStyle = COLORS.dim;
     ctx.font = `500 13px ${ROUND}`;
-    ctx.fillText(ui.lbTab === 0 ? "No scores yet. Be the first!" : "No live streaks yet.", 0, -110);
+    ctx.fillText(ui.lbTab === 0 ? "No scores yet. Be the first!" : ui.lbTab === 1 ? "No cup scores yet. Be the first!" : "No live streaks yet.", 0, -110);
   }
 
   // footer: posting, or where you stand
   ctx.textAlign = "center";
-  if (ui.lbTab === 0 && ui.lbCanPost) {
-    candyButton(0, LB_POST.y + LB_POST.h / 2, 230, LB_POST.h, "Post my daily score", "gold", 0, 16);
+  if ((ui.lbTab === 0 && ui.lbCanPost) || (ui.lbTab === 1 && ui.lbCupCanPost)) {
+    candyButton(0, LB_POST.y + LB_POST.h / 2, 230, LB_POST.h, ui.lbTab === 1 ? "Post my Cup score" : "Post my daily score", "gold", 0, 16);
   } else {
     ctx.fillStyle = COLORS.dim;
     ctx.font = `500 12px ${ROUND}`;
-    const note = ui.lbTab === 1 ? "Streaks count the days you post a daily score."
+    const note = ui.lbTab === 2 ? "Streaks count the days you post a daily score."
+      : ui.lbTab === 1 ? (ui.lbCupPosted ? `You posted ${ui.lbCupPosted.score.toLocaleString("en-US")} \u00B7 #${ui.lbCupPosted.rank}` : `Play the Weekly: your first finished run counts. Top ${ECONOMY.cup.top} win coins.`)
       : ui.lbPosted ? `You posted ${ui.lbPosted.score.toLocaleString("en-US")} \u00B7 #${ui.lbPosted.rank}`
       : "Finish today\u2019s daily to join the board.";
     ctx.fillText(note, 0, LB_POST.y + 22, cw - 40);
@@ -1168,7 +1198,7 @@ export function drawLeaderboard(dt: number): void {
   ctx.restore();
 }
 
-export type LbAction = "close" | "tab0" | "tab1" | "post" | null;
+export type LbAction = "close" | "tab0" | "tab1" | "tab2" | "post" | null;
 /** Maps a tap (card-local coordinates) to what it means. */
 export function lbTap(lx: number, ly: number): LbAction {
   const { cw } = lbLayout();
@@ -1176,8 +1206,8 @@ export function lbTap(lx: number, ly: number): LbAction {
   if (ly >= 250 && ly <= 296 && Math.abs(lx) <= 90) return "close";
   for (let i = 0; i < LB_TABS.length; i++) {
     const r = lbTabRect(i, cw);
-    if (lx >= r.x && lx <= r.x + r.w && ly >= r.y && ly <= r.y + r.h) return i === 0 ? "tab0" : "tab1";
+    if (lx >= r.x && lx <= r.x + r.w && ly >= r.y && ly <= r.y + r.h) return i === 0 ? "tab0" : i === 1 ? "tab1" : "tab2";
   }
-  if (ui.lbTab === 0 && ui.lbCanPost && ly >= LB_POST.y - 4 && ly <= LB_POST.y + LB_POST.h + 4 && Math.abs(lx) <= 116) return "post";
+  if (((ui.lbTab === 0 && ui.lbCanPost) || (ui.lbTab === 1 && ui.lbCupCanPost)) && ly >= LB_POST.y - 4 && ly <= LB_POST.y + LB_POST.h + 4 && Math.abs(lx) <= 116) return "post";
   return null;
 }

@@ -53,7 +53,9 @@ export function askName(initial: string | null, errorText = ""): Promise<string 
     const onKey = (e: KeyboardEvent): void => { if (e.key === "Escape") finish(null); };
     document.addEventListener("keydown", onKey);
     cancel.onclick = () => finish(null);
-    backdrop.onclick = (e) => { if (e.target === backdrop) finish(null); };
+    // The tap that opened this dialog can arrive as a click on the new backdrop; ignore the first moments.
+    const openedAt = performance.now();
+    backdrop.onclick = (e) => { if (e.target === backdrop && performance.now() - openedAt > 500) finish(null); };
     card.onsubmit = (e) => {
       e.preventDefault();
       const name = input.value.replace(/\s+/g, " ").trim();

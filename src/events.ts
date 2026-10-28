@@ -10,6 +10,8 @@ export const EVENT_NAMES = [
   "mode_entered",
   "journey_level",
   "daily_posted",
+  "cup_posted",
+  "challenge_sent",
   "shop_viewed",
   "purchase_started",
   "purchase_completed",

@@ -5,7 +5,7 @@ import { goalReached, goalText, goalValue, makeLevel, starsFor } from "./journey
 import { scoreBucket, timeUntilMidnight } from "./meta";
 import { seeded } from "./rng";
 import { boardEmoji, shareText } from "./share";
-import { weekId } from "./streak";
+import { addDays, weekId } from "./streak";
 import { blankRun, recordMove, weeklyDone, weeklyFailed, weeklyFor, weeklySeed, weeklyValue, type WeeklyRun } from "./weekly";
 import { haptic, haptics } from "./haptics";
 import { isMuted, sfx, soundState, toggleMute, unlock } from "./sound";
@@ -19,7 +19,7 @@ import { award, awardAll, balance, savedUndos, startupRewards, takeSavedUndo } f
 import { ECONOMY, isPack } from "./economy";
 import { journeyStarsOwed, milestonesFor } from "./wallet";
 import { askName } from "./nameDialog";
-import { checkLeaderboard, fetchBoard, fetchStreaks, getPlayer, lb, postDaily, savePlayerName, startDaily } from "./leaderboardClient";
+import { checkLeaderboard, claimCupPrize, fetchBoard, fetchStreaks, getPlayer, lb, postDaily, savePlayerName, startDaily } from "./leaderboardClient";
 import { settings } from "./settings";
 import type { MoveTuple } from "./verify";
 import { track } from "./analytics";
@@ -28,7 +28,7 @@ import { adsReady, loadAds } from "./adLoader";
 import { isAdFree } from "./entitlements";
 import { ownership, ownsSku } from "./ownership";
 import { applyConsent, getConsent } from "./consent";
-import { handleReturn, syncEntitlements } from "./shopClient";
+import { claimCoins, handleReturn, syncEntitlements } from "./shopClient";
 import { openAccount } from "./accountUI";
 import { account, shouldPrompt, signinOffered, startCloudSync } from "./cloudClient";
 import { drawMap, mapCancel, mapCovers, mapDown, mapMove, mapUi, mapUp, mapWheel, openMap, setMapHandlers } from "./mapView";
@@ -114,12 +114,20 @@ function newState(o: GameOpts = {}): State {
 /** The mode in play, as analytics names it. */
 const modeName = (): string => (state.kind !== "classic" ? state.kind : state.daily ? "daily" : state.challenge !== null ? "challenge" : "classic");
 
+/** The board this game can post to: the day for the daily, the week's cup for the weekly, otherwise none. */
+const boardId = (): string | null => (state.kind === "weekly" && state.week ? weeklySeed(state.week) : state.daily);
+/** This week's cup id (the weekly's piece seed) and last week's, whose prizes are collected after it ends. */
+const cupId = (): string => weeklySeed(weekId(today()));
+const lastCupId = (): string => weeklySeed(addDays(weekId(today()), -7));
+
 /** Records today's first attempt (see records.ts). `abandoned` marks one walked away from mid-game. */
 function recordOfficial(abandoned: boolean): void {
-  if (!state.daily || state.practice || officialResult(state.daily)) return;
+  const id = boardId();
+  // The cup counts your first finished weekly run: walking away from one is just a restart, not an attempt.
+  if (!id || state.practice || officialResult(id) || (abandoned && state.kind === "weekly")) return;
   // Moves are kept only if the log is complete (a game begun before moves were recorded cannot be verified).
   const moves = state.moveLog.length === state.moves ? [...state.moveLog] : undefined;
-  saveOfficial(state.daily, { score: state.score, board: boardEmoji(state.grid, colorGrid), ...(abandoned ? { abandoned: true } : {}), ...(moves ? { moves } : {}) });
+  saveOfficial(id, { score: state.score, board: boardEmoji(state.grid, colorGrid), ...(abandoned ? { abandoned: true } : {}), ...(moves ? { moves } : {}) });
 }
 
 // ---- Saving a game in progress ------------------------------------------------
@@ -267,7 +275,7 @@ function undo(): void {
       stats.hist[scoreBucket(banked)] = Math.max(0, (stats.hist[scoreBucket(banked)] ?? 0) - 1);
       banked = null;
     }
-    if (state.daily && !state.practice) clearOfficial(state.daily);
+    if (boardId() && !state.practice) clearOfficial(boardId()!);
     if (state.won) { state.won = false; }
     saveStats();
   }
@@ -356,7 +364,8 @@ function coinToast(n: number, desc: string, inGame = true, tag = "COINS EARNED")
 function payStartupCoins(): void {
   const r = startupRewards(today());
   coinToast(r.starter, "Welcome! Spend them in the coin shop.", false, "WELCOME GIFT");
-  coinToast(r.daily, "Daily bonus. Come back tomorrow for more.", false, "DAILY BONUS");
+  coinToast(r.daily, r.streak.day > 1 ? `Day ${r.streak.day} in a row. Keep it going!` : "Daily bonus. Come back tomorrow for more.", false, "DAILY BONUS");
+  coinToast(r.streak.coins, `${r.streak.day} days in a row!`, false, "LOGIN STREAK");
   coinToast(awardAll("milestone", milestonesFor(stats.bestScore)), "For your best score so far.", false, "MILESTONE");
 }
 
@@ -365,7 +374,7 @@ let overPress: "share" | "again" | "mode" | "undo" | "board" | null = null;
 let sharedAt = -10; // clock time of the last "copied" confirmation
 
 /** Today's finished first attempt can open the leaderboard from the game-over card. */
-const lbButtonShown = (): boolean => lb.available && !!state.daily && !state.practice && state.daily === today() && state.kind === "classic";
+const lbButtonShown = (): boolean => lb.available && !state.practice && ((!!state.daily && state.daily === today() && state.kind === "classic") || (state.kind === "weekly" && !!state.week));
 
 function overHit(x: number, y: number): "share" | "again" | "mode" | "undo" | "board" {
   if (Math.abs(x - W / 2) <= 96) {
@@ -378,12 +387,15 @@ function overHit(x: number, y: number): "share" | "again" | "mode" | "undo" | "b
   return "again";
 }
 
+/** A random classic game, over with a score: its link carries the seed so a friend plays the same pieces. */
+const challengeable = (): boolean => state.kind === "classic" && !state.daily && state.score > 0;
+
 /** The text and link to share for this game: a small emoji picture of the board, not just a number. */
 function shareContent(): { text: string; url: string } {
   const origin = location.origin;
   if (state.kind === "journey" && state.level)
-    return { text: `Block Puzzle \u00B7 Level ${state.level} ${state.won ? "\u2605".repeat(state.stars) : "(not cleared yet)"}\nCan you clear it?`, url: origin };
-  if (state.kind === "zen") return { text: `Block Puzzle zen: ${state.lines} lines cleared, no game over.`, url: origin };
+    return { text: `Bun Blocks \u00B7 Level ${state.level} ${state.won ? "\u2605".repeat(state.stars) : "(not cleared yet)"}\nCan you clear it?`, url: origin };
+  if (state.kind === "zen") return { text: `Bun Blocks zen: ${state.lines} lines cleared, no game over.`, url: origin };
   if (state.daily) {
     // The official first attempt is the result that gets shared, even after a practice run.
     const off = officialResult(state.daily);
@@ -391,13 +403,17 @@ function shareContent(): { text: string; url: string } {
     const score = off ? off.score : state.score;
     return {
       text: shareText({
-        title: `Block Puzzle \u00B7 ${state.daily}`, score, board, par: parFor(state.daily),
+        title: `Bun Blocks \u00B7 ${state.daily}`, score, board, par: parFor(state.daily),
         streak: state.daily === today() ? streakNow() : 0, note: state.daily === today() ? undefined : "Archive",
       }),
       url: origin,
     };
   }
-  const title = state.kind === "weekly" && state.week ? `Block Puzzle \u00B7 Weekly ${state.week}` : "Block Puzzle";
+  const title = state.kind === "weekly" && state.week ? `Bun Blocks \u00B7 Weekly ${state.week}` : "Bun Blocks";
+  if (challengeable() && state.challenge === null) {
+    track("challenge_sent");
+    return { text: `I scored ${state.score.toLocaleString("en-US")} in Bun Blocks \u{1F430}\n${boardEmoji(state.grid, colorGrid)}\nBeat me on the exact same pieces!`, url: challengeUrl(origin, state.seed, state.score) };
+  }
   const text = shareText({ title, score: state.score, board: boardEmoji(state.grid, colorGrid) }) + "\nBeat me on the exact same pieces!";
   // A random game's link carries its seed, so a friend plays the same pieces against my score.
   return { text, url: state.kind === "weekly" ? origin : challengeUrl(origin, state.seed, state.score) };
@@ -499,7 +515,7 @@ function endGame(): void {
     stats.hist[b] = (stats.hist[b] ?? 0) + 1;
     banked = state.score;
   }
-  if (state.daily && !state.practice) recordOfficial(false);
+  if (boardId() && !state.practice) recordOfficial(false);
   // Today's daily, first attempt only (never a replay or an archive day), paid once per day.
   if (state.daily === today() && !state.practice) {
     coinToast(award("daily_challenge", `daily:${state.daily}`, ECONOMY.dailyChallenge), "For finishing today’s daily.");
@@ -553,7 +569,17 @@ function canPostToday(): boolean {
   return !!off?.moves && off.moves.length > 0 && !postedResult(today());
 }
 
+/** The cup's first finished run is postable once it has a complete, replayable move list. */
+function canPostCup(): boolean {
+  const off = officialResult(cupId());
+  return !!off?.moves && off.moves.length > 0 && !postedResult(cupId());
+}
+
 function syncLeaderboardState(): void {
+  ui.lbCupId = cupId();
+  ui.lbCupCanPost = canPostCup();
+  const cp = postedResult(cupId());
+  ui.lbCupPosted = cp ? { rank: cp.rank, total: cp.total, score: cp.score } : null;
   ui.lbCanPost = canPostToday();
   const p = postedResult(today());
   ui.lbPosted = p ? { rank: p.rank, total: p.total, score: p.score } : null;
@@ -562,21 +588,22 @@ function syncLeaderboardState(): void {
 async function refreshBoards(): Promise<void> {
   ui.lbLoading = true;
   syncLeaderboardState();
-  const [board, streaks] = await Promise.all([fetchBoard(today()), fetchStreaks()]);
+  const [board, streaks, cup] = await Promise.all([fetchBoard(today()), fetchStreaks(), fetchBoard(cupId())]);
   ui.lbBoard = board;
   ui.lbStreaks = streaks;
+  ui.lbCup = cup;
   ui.lbLoading = false;
   if (!board && !streaks) ui.lbMsg = "Could not load the leaderboard. Check your connection.";
 }
 
-function openLeaderboard(): void {
-  ui.lbOn = true; ui.lbT = 0; ui.lbTab = 0; ui.lbMsg = ""; ui.lbBoard = null; ui.lbStreaks = null;
+function openLeaderboard(tab = 0): void {
+  ui.lbOn = true; ui.lbT = 0; ui.lbTab = tab; ui.lbMsg = ""; ui.lbBoard = null; ui.lbStreaks = null; ui.lbCup = null;
   void refreshBoards();
 }
 
 /** Asks for a nickname if needed, then posts the first attempt. The server verifies it by replaying the moves. */
-async function postMyScore(): Promise<void> {
-  const date = today();
+async function postMyScore(cup = false): Promise<void> {
+  const date = cup ? cupId() : today();
   const off = officialResult(date);
   if (!off?.moves || postedResult(date)) return;
   let name = getPlayer().name;
@@ -589,7 +616,7 @@ async function postMyScore(): Promise<void> {
     if (r.ok) {
       savePlayerName(entered);
       savePosted(date, { rank: r.rank, total: r.total, score: r.score, streak: r.streak });
-      track("daily_posted", { rank: r.rank });
+      track(cup ? "cup_posted" : "daily_posted", { rank: r.rank });
       ui.lbMsg = `Posted! You are #${r.rank} of ${r.total.toLocaleString("en-US")}.`;
       sfx.praise(2);
       haptic([20, 30, 20]);
@@ -598,7 +625,7 @@ async function postMyScore(): Promise<void> {
     }
     if (r.error === "bad name" || r.error === "name taken") { name = entered; problem = r.message ?? "That name is not allowed."; continue; }
     if (r.error === "already submitted") {
-      ui.lbMsg = "You already posted today.";
+      ui.lbMsg = cup ? "You already posted to this cup." : "You already posted today.";
       savePosted(date, { rank: 0, total: 0, score: off.score, streak: 0 });
       await refreshBoards();
       return;
@@ -612,10 +639,26 @@ async function postMyScore(): Promise<void> {
 payStartupCoins();
 document.addEventListener("visibilitychange", () => { if (!document.hidden) payStartupCoins(); });
 
+/** Last week's cup prize: asked for once per week (only if you posted), then collected like bought coins. */
+async function collectCupPrize(): Promise<void> {
+  const week = lastCupId();
+  const doneKey = `blockpuzzle.cupPrize.${week}`;
+  try { if (localStorage.getItem(doneKey) === "1" || !postedResult(week)) return; } catch { return; }
+  const r = await claimCupPrize(week);
+  if (!r) return; // not reachable, or the week is not over everywhere yet: try again next time
+  try { localStorage.setItem(doneKey, "1"); } catch { /* ignore */ }
+  if (r.prize > 0) {
+    await claimCoins();
+    toasts.push({ title: `Weekly Cup #${r.rank}`, desc: `You won ${r.prize} coins!`, t: 0, label: "CUP PRIZE" });
+    coinPulse = 1;
+  }
+}
+
 // Learn what this deployment offers (leaderboard, usage stats, shop), then act on it.
 void checkLeaderboard().then(async () => {
   applyConsent(); // analytics only ever start after the player has said yes
   if (getConsent() === "yes") track("session_start");
+  if (lb.available) void collectCupPrize();
   if (lb.shop) {
     const back = await handleReturn(location.search);
     const arrived = await syncEntitlements(); // also collects any coins bought with money
@@ -713,8 +756,8 @@ canvas.addEventListener("pointerup", (e) => {
     const l = lbLayout();
     const act = lbTap((e.clientX - W / 2) / l.k, (e.clientY - H / 2) / l.k);
     if (act === "close") ui.lbOn = false;
-    else if (act === "tab0" || act === "tab1") { ui.lbTab = act === "tab0" ? 0 : 1; ui.lbMsg = ""; haptics.tick(); }
-    else if (act === "post") void postMyScore();
+    else if (act === "tab0" || act === "tab1" || act === "tab2") { ui.lbTab = act === "tab0" ? 0 : act === "tab1" ? 1 : 2; ui.lbMsg = ""; haptics.tick(); }
+    else if (act === "post") void postMyScore(ui.lbTab === 1);
     return;
   }
   if (ui.consentPress) {
@@ -813,7 +856,7 @@ canvas.addEventListener("pointerup", (e) => {
     if (adBusy || overHit(e.clientX, e.clientY) !== want) return;
     if (want === "share") void shareScore();
     else if (want === "undo") { if (canUndoOver()) undo(); else if (adUndoOffered()) watchAdUndo(); }
-    else if (want === "board") openLeaderboard();
+    else if (want === "board") openLeaderboard(state.kind === "weekly" ? 1 : 0);
     else if (want === "mode" && state.kind === "journey") openMap();
     else if (want === "mode") reset(state.kind !== "classic" ? {} : state.daily ? {} : { daily: today() });
     else if (state.kind === "journey" && state.won && state.level) openMap({ level: state.level, stars: state.stars });
@@ -944,6 +987,7 @@ canvas.addEventListener("pointerup", (e) => {
     state.moveLog.push([shapeIndex(drag.shape), t.row, t.col]);
     // Today's official attempt is timed by the server from its start, so posting a computed game fails.
     if (state.daily && !state.practice && state.daily === today()) void startDaily(state.daily);
+    else if (state.kind === "weekly" && state.week) void startDaily(weeklySeed(state.week));
     state.lines += lines;
     // Zen and journey games do not feed the score records: their goals are not a score race.
     const scored = state.kind === "classic" || state.kind === "weekly";
@@ -1552,12 +1596,12 @@ function render(dt: number): void {
     const held = (k: typeof overPress): number => (overPress === k ? 1 : 0);
     candyButton(0, 66, 200, 54, lvl ? (state.won ? "Continue" : "Retry level") : "Play again", state.won || gold ? "green" : "pink", held("again"), 21);
     const copied = clock - sharedAt < 1.8;
-    candyButton(0, 131, 184, 42, copied ? "Copied!" : "Share score", copied ? "green" : "blue", held("share"), 16);
+    candyButton(0, 131, 184, 42, copied ? "Copied!" : challengeable() ? "Challenge a friend" : "Share score", copied ? "green" : "blue", held("share"), 16);
 
     ctx.fillStyle = COLORS.dim;
     if (dy) {
       // Today's first attempt: the leaderboard, in the same candy style as the other buttons.
-      const posted = postedResult(state.daily!);
+      const posted = postedResult(boardId()!);
       candyButton(0, 185, 184, 40, posted && posted.rank > 0 ? `\u{1F3C6} Leaderboard \u00B7 #${posted.rank}` : "\u{1F3C6} Leaderboard", "gold", held("board"), 15);
     }
     ctx.fillStyle = COLORS.dim;
@@ -1650,7 +1694,7 @@ function maybeShowInstall(): void {
   const msg = document.createElement("span");
   msg.style.flex = "1";
   msg.textContent = installEvent
-    ? "Install Block Puzzle for quick, offline play."
+    ? "Install Bun Blocks for quick, offline play."
     : "Add to Home Screen: tap Share, then \u201cAdd to Home Screen\u201d.";
   bar.append(msg);
 

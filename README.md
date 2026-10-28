@@ -1,4 +1,4 @@
-# Block Puzzle
+# Bun Blocks
 
 An original 8×8 drag-and-drop block puzzle. Drag pieces from the tray onto the board and clear
 rows, columns and 2×4 regions. No rotating, no timer, no ads, no backend.
@@ -77,7 +77,7 @@ Everything here is off until configured, and none of it can change the rules or 
   Sales on the admin page are counted by the server when a payment is confirmed, not reported by browsers.
 - **Sign-in and cloud save** (optional for players, off until configured): `AUTH_SECRET` (at least 24
   characters; it keys the email hashes, so never change it once players have signed in) plus either or
-  both of: email codes via Resend (`RESEND_API_KEY`, `EMAIL_FROM` such as `Block Puzzle <play@yourdomain>`
+  both of: email codes via Resend (`RESEND_API_KEY`, `EMAIL_FROM` such as `Bun Blocks <play@yourdomain>`
   on a domain verified in Resend), and Google (`GOOGLE_CLIENT_ID`, a Web OAuth client whose authorised
   JavaScript origins list the site). A signed-in device keeps a cloud save that merges with the account's
   (counters add up, bests take the higher), so two phones never overwrite each other. Signing in on a phone
@@ -145,3 +145,14 @@ The server storage is Redis by default. Set `STORE=postgres` and `DATABASE_URL` 
 routes on Postgres instead; tables are created on first use. `neon.ts` holds the Neon project config
 (`neon deploy`). Switching does not move existing Redis data. To test: `DATABASE_URL=… npx vitest run src/server/postgres.test.ts`
 runs the storage contract against the real database, and `STORE=postgres npm run dev:api` serves the app on it.
+
+### Weekly Cup, login streak, seasonal themes, challenges
+
+- **Weekly Cup**: the weekly mode's pieces are the same for everyone for a week (Monday to Sunday, UTC). Your first
+  finished run counts and can be posted to the Cup tab of the leaderboard; the server replays the moves like it
+  does for the daily. When the week ends, the top 10 get coins (`ECONOMY.cup` in `src/economy.ts`), paid once into
+  the same server-held balance that bought coins use, and the device collects it on its next visit.
+- **Login streak**: opening the game on consecutive days adds bonus coins on some days (`ECONOMY.loginStreak`); a
+  missed day restarts it. It is on top of the daily bonus.
+- **Seasonal themes**: limited-window themes (`season` in `src/progress.ts`) are wearable only inside their dates.
+- **Challenge a friend**: the game-over button on a random game shares a link with the seed and your score.

@@ -1,6 +1,8 @@
 // Validation rules for leaderboard input. Everything from the network is untrusted, so each field is
 // checked here before it reaches storage. Pure, so it is covered by tests.
 
+import { addDays, weekId } from "../streak.js";
+
 const BLOCKED = ["fuck", "shit", "cunt", "nigg", "fagg", "rape", "nazi", "hitler", "whore", "slut", "bitch", "dick", "cock", "porn", "kill yourself"]
   .map((w) => w.replace(/[^a-z]/g, ""));
 /** Each blocked word as a pattern where any vowel may also be written as a digit ("f4ck", "sh1t"). */
@@ -61,6 +63,35 @@ export function dateAllowed(date: string, now: Date): boolean {
 }
 
 export const utcToday = (now: Date): string => now.toISOString().slice(0, 10);
+
+// ---- Weekly Cup boards ----------------------------------------------------------------------
+// A board is named by a day ("2026-10-28", the daily) or by a week ("w-2026-10-26", the Monday): the
+// Weekly Cup. The name is also the piece-sequence seed, so the server replays either one the same way.
+
+export const isWeekId = (v: unknown): v is string =>
+  typeof v === "string" && /^w-\d{4}-\d{2}-\d{2}$/.test(v) && isDate(v.slice(2)) && weekId(v.slice(2)) === v.slice(2);
+export const isBoardId = (v: unknown): v is string => isDate(v) || isWeekId(v);
+
+/** The first day after the week (so the week is Monday through Sunday, in UTC). */
+const weekEnd = (id: string): string => addDays(id.slice(2), 7);
+
+/** Whether a board can still be played and posted: a day by dateOpen, a week while any time zone is inside it. */
+export function boardOpen(id: string, now: Date): boolean {
+  if (!id.startsWith("w-")) return dateOpen(id, now);
+  const earliest = utcToday(new Date(now.getTime() - 12 * 3_600_000));
+  const latest = utcToday(new Date(now.getTime() + 14 * 3_600_000));
+  return id.slice(2) <= latest && earliest < weekEnd(id);
+}
+
+/** Whether a board may be read: a day by dateAllowed, a week from its start until 60 days after it ended. */
+export function boardAllowed(id: string, now: Date): boolean {
+  if (!id.startsWith("w-")) return dateAllowed(id, now);
+  const today = utcToday(now);
+  return id.slice(2) <= addDays(today, 1) && addDays(weekEnd(id), 60) >= today;
+}
+
+/** A week is over once no time zone is still inside it, so nobody can post to it any more. */
+export const weekOver = (id: string, now: Date): boolean => utcToday(new Date(now.getTime() - 12 * 3_600_000)) >= weekEnd(id);
 
 /**
  * Whether date is a calendar day somewhere on Earth right now (time zones run from UTC-12 to UTC+14).

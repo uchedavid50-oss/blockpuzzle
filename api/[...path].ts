@@ -6,6 +6,7 @@ import * as board from "../routes/board.js";
 import * as checkout from "../routes/checkout.js";
 import * as coins from "../routes/coins.js";
 import * as collect from "../routes/collect.js";
+import * as cup from "../routes/cup.js";
 import * as entitlements from "../routes/entitlements.js";
 import * as health from "../routes/health.js";
 import * as payments from "../routes/payments.js";
@@ -26,6 +27,7 @@ const routes: Record<string, { GET?: Handler; POST?: Handler }> = {
   "checkout": checkout,
   "coins": coins,
   "collect": collect,
+  "cup": cup,
   "entitlements": entitlements,
   "health": health,
   "payments": payments,

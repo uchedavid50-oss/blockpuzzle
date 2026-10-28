@@ -36,8 +36,8 @@ export class ResendMailer implements Mailer {
       method: "POST",
       headers: { Authorization: `Bearer ${this.key}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        from: this.from, to: [to], subject: `${code} is your Block Puzzle code`,
-        text: `Your Block Puzzle sign-in code is ${code}. It works for 10 minutes.\n\nIf you did not ask for it, ignore this email.`,
+        from: this.from, to: [to], subject: `${code} is your Bun Blocks code`,
+        text: `Your Bun Blocks sign-in code is ${code}. It works for 10 minutes.\n\nIf you did not ask for it, ignore this email.`,
       }),
     });
     if (!res.ok) throw new Error(`resend: HTTP ${res.status}`);

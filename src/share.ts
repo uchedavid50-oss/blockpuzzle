@@ -19,7 +19,7 @@ export function boardEmoji(grid: Grid, colors: readonly (readonly number[])[]): 
 }
 
 export interface ShareInfo {
-  title: string; // e.g. "Block Puzzle · 2026-10-19"
+  title: string; // e.g. "Bun Blocks · 2026-10-19"
   score: number;
   board: string; // from boardEmoji
   par?: number | null;

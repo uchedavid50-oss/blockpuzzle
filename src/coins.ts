@@ -6,6 +6,7 @@
 // doing it: nothing bought with coins is ranked, and coins cannot buy anything sold for money.
 // Coins bought with money are credited on the server and arrive here through shopClient.claimCoins.
 
+import { nextLogin, parseLogin, type LoginRec } from "./loginStreak.js";
 import { claimReward, type AdProvider } from "./ads.js";
 import { track } from "./analytics.js";
 import { ECONOMY, type CoinItemId, type CoinSource } from "./economy.js";
@@ -139,12 +140,23 @@ export function takeSavedUndo(): boolean {
  * Once per app start: the starter balance for a brand-new wallet, today's daily bonus, and a tidy-up
  * of old grant ids. Returns what was paid, for the welcome toasts.
  */
-export function startupRewards(today: string): { starter: number; daily: number } {
+const LOGIN_KEY = "blockpuzzle.login";
+function loginStreak(today: string): { day: number; coins: number } {
+  let rec: LoginRec | null = null;
+  try { rec = parseLogin(JSON.parse(localStorage.getItem(LOGIN_KEY) ?? "null")); } catch { /* start a new streak */ }
+  const r = nextLogin(rec, today);
+  if (!r.fresh) return { day: r.day, coins: 0 };
+  try { localStorage.setItem(LOGIN_KEY, JSON.stringify(r.rec)); } catch { /* the day still pays once: the grant id is dated */ }
+  return { day: r.day, coins: r.bonus > 0 ? award("login_streak", `streak:${today}`, r.bonus) : 0 };
+}
+
+export function startupRewards(today: string): { starter: number; daily: number; streak: { day: number; coins: number } } {
   const starter = wallet.isNew ? award("starter", "starter", ECONOMY.starter) : 0;
   wallet.isNew = false;
   const daily = award("daily_bonus", `bonus:${today}`, ECONOMY.dailyBonus);
+  const streak = loginStreak(today);
   const w = latest();
   const tidy = prune(w, today);
   if (tidy !== w) commit(tidy);
-  return { starter, daily };
+  return { starter, daily, streak };
 }

@@ -8,6 +8,7 @@ import { startDaily, submitScore } from "../src/server/handlers";
 import { RULES_VERSION } from "../src/verify";
 import { playBot } from "../src/solver";
 import * as health from "../routes/health";
+import * as cup from "../routes/cup";
 import * as submit from "../routes/submit";
 import * as rename from "../routes/rename";
 import * as board from "../routes/board";
@@ -47,7 +48,7 @@ const store: Store = usePg ? postgresStore(process.env.DATABASE_URL!) : new Memo
 (globalThis as { __blockpuzzleStore?: Store }).__blockpuzzleStore = store;
 
 type Route = { GET?: (r: Request) => Response | Promise<Response>; POST?: (r: Request) => Response | Promise<Response> };
-const routes: Record<string, Route> = { "/api/health": health, "/api/submit": submit, "/api/rename": rename, "/api/board": board, "/api/streaks": streaks, "/api/collect": collectApi, "/api/stats": statsApi, "/api/checkout": checkout, "/api/purchase": purchase, "/api/entitlements": entitlements, "/api/paystack-webhook": webhook, "/api/coins": coinsApi, "/api/start": startApi, "/api/transfer": transferApi, "/api/payments": paymentsApi, "/api/signin": signinApi, "/api/save": saveApi };
+const routes: Record<string, Route> = { "/api/health": health, "/api/cup": cup, "/api/submit": submit, "/api/rename": rename, "/api/board": board, "/api/streaks": streaks, "/api/collect": collectApi, "/api/stats": statsApi, "/api/checkout": checkout, "/api/purchase": purchase, "/api/entitlements": entitlements, "/api/paystack-webhook": webhook, "/api/coins": coinsApi, "/api/start": startApi, "/api/transfer": transferApi, "/api/payments": paymentsApi, "/api/signin": signinApi, "/api/save": saveApi };
 
 // A few fake players with real, verified games, so the board has something on it.
 const today = new Date().toISOString().slice(0, 10);

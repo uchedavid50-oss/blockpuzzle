@@ -97,6 +97,15 @@ export async function postDaily(date: string, moves: readonly MoveTuple[], name:
   } catch { return { ok: false, error: "network", message: "Could not reach the leaderboard. Try again later." }; }
 }
 
+/** After a Weekly Cup ends: asks the server for this player's prize. Returns null if it could not be reached. */
+export async function claimCupPrize(week: string): Promise<{ rank: number; prize: number } | null> {
+  try {
+    const { status, data } = await post("/api/cup", { player: getPlayer().id, week });
+    if (status !== 200) return status === 409 ? null : { rank: 0, prize: 0 };
+    return { rank: Number(data.rank) || 0, prize: Number(data.prize) || 0 };
+  } catch { return null; }
+}
+
 export async function renameOnServer(name: string): Promise<boolean> {
   try { return (await post("/api/rename", { player: getPlayer().id, name })).status === 200; } catch { return false; }
 }

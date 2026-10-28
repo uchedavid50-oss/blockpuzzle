@@ -25,8 +25,8 @@ describe("boardEmoji", () => {
 describe("shareText", () => {
   const board = boardEmoji(emptyGrid(), []);
   it("puts the title first and the score line last", () => {
-    const lines = shareText({ title: "Block Puzzle · 2026-10-19", score: 740, board, par: 680, streak: 6 }).split("\n");
-    expect(lines[0]).toBe("Block Puzzle · 2026-10-19");
+    const lines = shareText({ title: "Bun Blocks · 2026-10-19", score: 740, board, par: 680, streak: 6 }).split("\n");
+    expect(lines[0]).toBe("Bun Blocks · 2026-10-19");
     expect(lines[lines.length - 1]).toBe("740 pts · Par 680 · 🔥 6");
   });
   it("leaves out par and streak when absent", () => {

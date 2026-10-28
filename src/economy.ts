@@ -13,6 +13,11 @@ export const ECONOMY = {
   starter: 50,
   /** Once per calendar day, for opening the game. */
   dailyBonus: 10,
+  /**
+   * Extra coins on top of the daily bonus for opening the game on consecutive days: the n-th day in a
+   * row (counting 1 to 7, then starting over) pays entry n-1. Miss a day and the count restarts.
+   */
+  loginStreak: [0, 0, 10, 0, 15, 0, 50],
   /** Once per day, for finishing today's daily on the first attempt. */
   dailyChallenge: 20,
   /** Once per day, extra, when that first attempt beats par. */
@@ -28,6 +33,8 @@ export const ECONOMY = {
     [2500, 50],
     [5000, 100],
   ] as const,
+  /** Weekly Cup prizes by finishing rank (1st, 2nd, 3rd), then a smaller one down to `cup.top`. */
+  cup: { prizes: [300, 200, 100], top: 10, restPrize: 40 },
   /** Rewarded ads for coins: only on a confirmed completion, and at most this many a day. */
   ad: { coins: 15, perDay: 5 },
   /** Guard rails, not tuning: no single grant above this, and no balance above `maxBalance`. */
@@ -87,5 +94,5 @@ export const packFor = (s: unknown): CoinPack | undefined => COIN_PACKS.find((p)
 
 // ---- Where coins come from (for analytics) -------------------------------------------------
 
-export const COIN_SOURCES = ["starter", "daily_bonus", "daily_challenge", "daily_par", "weekly", "journey", "milestone", "ad", "purchase"] as const;
+export const COIN_SOURCES = ["starter", "daily_bonus", "login_streak", "daily_challenge", "daily_par", "weekly", "journey", "milestone", "ad", "purchase"] as const;
 export type CoinSource = (typeof COIN_SOURCES)[number];

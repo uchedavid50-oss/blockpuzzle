@@ -44,18 +44,18 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("starting balance and the daily bonus", () => {
   it("gives a new player the starter balance and today's bonus, once", () => {
-    expect(C.startupRewards(D)).toEqual({ starter: ECONOMY.starter, daily: ECONOMY.dailyBonus });
+    expect(C.startupRewards(D)).toMatchObject({ starter: ECONOMY.starter, daily: ECONOMY.dailyBonus });
     expect(C.balance()).toBe(ECONOMY.starter + ECONOMY.dailyBonus);
-    expect(C.startupRewards(D)).toEqual({ starter: 0, daily: 0 }); // reopening the same day
+    expect(C.startupRewards(D)).toMatchObject({ starter: 0, daily: 0 }); // reopening the same day
     C.reloadWallet(); // and after a reload
-    expect(C.startupRewards(D)).toEqual({ starter: 0, daily: 0 });
+    expect(C.startupRewards(D)).toMatchObject({ starter: 0, daily: 0 });
     expect(C.balance()).toBe(ECONOMY.starter + ECONOMY.dailyBonus);
   });
 
   it("pays the bonus again the next day, but never the starter", () => {
     C.startupRewards(D);
     C.reloadWallet();
-    expect(C.startupRewards("2026-10-22")).toEqual({ starter: 0, daily: ECONOMY.dailyBonus });
+    expect(C.startupRewards("2026-10-22")).toMatchObject({ starter: 0, daily: ECONOMY.dailyBonus });
   });
 
   it("does not re-pay the starter if the record exists but is damaged", () => {

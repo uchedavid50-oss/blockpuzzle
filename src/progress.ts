@@ -171,6 +171,11 @@ export const THEMES: { name: string; colors: string[]; req?: string; season?: { 
   { name: "Pumpkin", season: { from: [10, 15], to: [11, 3], label: "Oct 15 \u2013 Nov 3" }, colors: ["#ff7a1a", "#ffb347", "#7bd16f", "#b57aff", "#ff5a3c", "#ffd23f", "#4fc3a1", "#e8590c"] },
   { name: "Frost", season: { from: [12, 1], to: [1, 6], label: "Dec 1 \u2013 Jan 6" }, colors: ["#8fd3ff", "#d6f0ff", "#5aa9ff", "#b8c6ff", "#7ee8e0", "#e8f7ff", "#9bb7ff", "#6fe0ff"] },
   { name: "Bloom", season: { from: [3, 15], to: [4, 30], label: "Mar 15 \u2013 Apr 30" }, colors: ["#ff8fb1", "#ffc2d4", "#9be37f", "#ffe66d", "#c3a6ff", "#7fd8be", "#ffa6a6", "#b5e48c"] },
+  { name: "Cupid", season: { from: [2, 1], to: [2, 16], label: "Feb 1 \u2013 Feb 16" }, colors: ["#ff4d6d", "#ff758f", "#ffb3c1", "#c9184a", "#ff8fa3", "#a4133c", "#ffccd5", "#e5989b"] },
+  { name: "Naija", season: { from: [9, 25], to: [10, 5], label: "Sep 25 \u2013 Oct 5" }, colors: ["#008751", "#2ecc71", "#ffffff", "#00b36b", "#f1c40f", "#27ae60", "#d5f5e3", "#1e8449"] },
+  { name: "Carnival", season: { from: [5, 1], to: [6, 14], label: "May 1 \u2013 Jun 14" }, colors: ["#ff006e", "#fb5607", "#ffbe0b", "#8338ec", "#3a86ff", "#06d6a0", "#ef476f", "#ffd166"] },
+  { name: "Harvest", season: { from: [11, 4], to: [11, 30], label: "Nov 4 \u2013 Nov 30" }, colors: ["#c9822b", "#e0a84a", "#a5612a", "#d4a017", "#7a8f3a", "#b5651d", "#e8c872", "#8c5a2b"] },
+  { name: "Festive", season: { from: [12, 15], to: [12, 31], label: "Dec 15 \u2013 Dec 31" }, colors: ["#d7263d", "#1b9e55", "#f4c430", "#ffffff", "#8e1b2c", "#2fb673", "#ffdf6b", "#b3202f"] },
   { name: "Sunny", season: { from: [6, 15], to: [8, 31], label: "Jun 15 \u2013 Aug 31" }, colors: ["#ffd23f", "#ff7f50", "#2ec4b6", "#ff5d8f", "#4cc9f0", "#9ef01a", "#ff9f1c", "#7b6cff"] },
   // Okabe-Ito: chosen to stay distinguishable with the common kinds of colour blindness.
   { name: "Colour-blind", colors: ["#0072b2", "#e69f00", "#56b4e9", "#009e73", "#f0e442", "#d55e00", "#cc79a7", "#999999"] },
