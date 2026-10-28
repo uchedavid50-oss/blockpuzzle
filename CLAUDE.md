@@ -62,7 +62,7 @@ Coins (src/economy.ts numbers, src/wallet.ts rules, src/coins.ts storage, src/se
   device collects them with an atomic claim (retry-safe claim id). Never credit coins from the client.
 - Ad coins only after `claimReward` returns true (coins.ts `watchAdForCoins`), capped per day.
 
-The one backend is the leaderboard (api/ routes and src/server/), kept deliberately small:
+The one backend is the leaderboard (api/ is one dispatcher over routes/, plus src/server/; Vercel Hobby allows only 12 functions), kept deliberately small:
 - A random player id and a public nickname. Sign-in is optional and exists because I asked for it
   (src/server/signin.ts, src/cloudsave.ts, src/cloudClient.ts, src/accountUI.ts): email code or Google,
   linked to the player id. Store only a keyed hash of the email and a masked label, never the address.
