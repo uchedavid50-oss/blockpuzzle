@@ -156,3 +156,9 @@ runs the storage contract against the real database, and `STORE=postgres npm run
   missed day restarts it. It is on top of the daily bonus.
 - **Seasonal themes**: limited-window themes (`season` in `src/progress.ts`) are wearable only inside their dates.
 - **Challenge a friend**: the game-over button on a random game shares a link with the seed and your score.
+
+### Backups
+
+`npx vite-node scripts/backup.ts` (after `vercel env pull .env.local`) saves every Redis key to `backups/redis-<date>.json`
+(git-ignored; it holds player data, so keep it private). `scripts/restore.ts <file> --yes` puts it back and replaces
+keys of the same name. Anonymous distinct-count statistics cannot be exported and start counting again.

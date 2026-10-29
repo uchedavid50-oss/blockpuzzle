@@ -8,3 +8,6 @@ dist
 .agents/
 .claude/
 skills-lock.json
+
+# Redis backups hold player data
+backups/

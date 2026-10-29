@@ -6,6 +6,7 @@ import { scoreBucket, timeUntilMidnight } from "./meta";
 import { seeded } from "./rng";
 import { boardEmoji, shareText } from "./share";
 import { addDays, weekId } from "./streak";
+import { cupHistory, cupSummary, shouldRemind } from "./cupReminder";
 import { blankRun, recordMove, weeklyDone, weeklyFailed, weeklyFor, weeklySeed, weeklyValue, type WeeklyRun } from "./weekly";
 import { haptic, haptics } from "./haptics";
 import { isMuted, sfx, soundState, toggleMute, unlock } from "./sound";
@@ -577,6 +578,7 @@ function canPostCup(): boolean {
 
 function syncLeaderboardState(): void {
   ui.lbCupId = cupId();
+  ui.lbCupHistory = pastCups();
   ui.lbCupCanPost = canPostCup();
   const cp = postedResult(cupId());
   ui.lbCupPosted = cp ? { rank: cp.rank, total: cp.total, score: cp.score } : null;
@@ -639,6 +641,28 @@ async function postMyScore(cup = false): Promise<void> {
 payStartupCoins();
 document.addEventListener("visibilitychange", () => { if (!document.hidden) payStartupCoins(); });
 
+/** On the cup's last day, once, to someone who has not posted: a nudge toward the coins. */
+function remindCup(): void {
+  const key = "blockpuzzle.cupRemind";
+  let last: string | null = null;
+  try { last = localStorage.getItem(key); } catch { /* remind anyway */ }
+  if (!shouldRemind(today(), !!postedResult(cupId()), last)) return;
+  try { localStorage.setItem(key, weekId(today())); } catch { /* ignore */ }
+  toasts.push({ title: "Last day of the Weekly Cup", desc: `Play the Weekly and post your score. Top ${ECONOMY.cup.top} win coins.`, t: 0, label: "WEEKLY CUP" });
+}
+
+/** Past cups this device posted to, for the Cup tab's footer. */
+function pastCups(): string | null {
+  const entries: [string, string | null][] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith("blockpuzzle.posted.w-")) entries.push([k, localStorage.getItem(k)]);
+    }
+  } catch { /* none to show */ }
+  return cupSummary(cupHistory(entries));
+}
+
 /** Last week's cup prize: asked for once per week (only if you posted), then collected like bought coins. */
 async function collectCupPrize(): Promise<void> {
   const week = lastCupId();
@@ -658,7 +682,7 @@ async function collectCupPrize(): Promise<void> {
 void checkLeaderboard().then(async () => {
   applyConsent(); // analytics only ever start after the player has said yes
   if (getConsent() === "yes") track("session_start");
-  if (lb.available) void collectCupPrize();
+  if (lb.available) { void collectCupPrize(); remindCup(); }
   if (lb.shop) {
     const back = await handleReturn(location.search);
     const arrived = await syncEntitlements(); // also collects any coins bought with money

@@ -79,6 +79,7 @@ export const ui = {
   lbStreaks: null as StreakData | null,
   lbCup: null as BoardData | null,
   lbCupId: "",
+  lbCupHistory: null as string | null,
   lbCupCanPost: false,
   lbCupPosted: null as { rank: number; total: number; score: number } | null,
   lbLoading: false,
@@ -1197,6 +1198,11 @@ export function drawLeaderboard(dt: number): void {
       : ui.lbPosted ? `You posted ${ui.lbPosted.score.toLocaleString("en-US")} \u00B7 #${ui.lbPosted.rank}`
       : "Finish today\u2019s daily to join the board.";
     ctx.fillText(note, 0, LB_POST.y + 22, cw - 40);
+  }
+  if (ui.lbTab === 1 && ui.lbCupHistory) {
+    ctx.fillStyle = COLORS.dim;
+    ctx.font = `600 11.5px ${ROUND}`;
+    ctx.fillText(ui.lbCupHistory, 0, 212, cw - 40);
   }
   ctx.fillStyle = ui.lbMsg.startsWith("Posted") ? "#1f7a2c" : COLORS.dim;
   ctx.font = `600 12px ${ROUND}`;
