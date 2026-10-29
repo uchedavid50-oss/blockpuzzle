@@ -7,6 +7,19 @@ export const isPublisherId = (s: unknown): s is string => typeof s === "string" 
 
 export const adsReady = (): boolean => adsState.ready && !adsState.blocked;
 
+type Googlefc = { callbackQueue?: unknown[]; showRevocationMessage?: () => void };
+const googlefc = (): Googlefc | undefined => (window as unknown as { googlefc?: Googlefc }).googlefc;
+
+/** True when Google's consent tool (AdSense > Privacy & messaging) is on this page and can reopen its choices. */
+export const adChoicesAvailable = (): boolean => adsReady() && typeof googlefc()?.showRevocationMessage === "function";
+
+/** Reopens the consent choices, so a player can change or withdraw an earlier answer. */
+export function showAdChoices(): void {
+  const g = googlefc();
+  if (!g || typeof g.showRevocationMessage !== "function") return;
+  try { g.showRevocationMessage(); } catch { /* the tool is not ready: nothing to show */ }
+}
+
 export function loadAds(clientId: string | undefined, test: boolean): void {
   if (adsState.requested || !isPublisherId(clientId)) return;
   adsState.requested = true;

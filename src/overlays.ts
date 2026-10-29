@@ -16,6 +16,7 @@ import { ownership } from "./ownership";
 import { beginCheckout, restoreFromCode, syncEntitlements, transferCode } from "./shopClient";
 import { openAccount } from "./accountUI";
 import { account, signedIn, signinOffered } from "./cloudClient";
+import { adChoicesAvailable, showAdChoices } from "./adLoader";
 import { applyConsent, getConsent, setConsent } from "./consent";
 import { track } from "./analytics";
 import { PALETTE, BADGES, COLLECTION_SIZE, THEMES, TILE_ORDER, applyTheme, collectionTiles, perkUndos, rankName, readStreak, stats, streakNow, themeIdx, themeUnlocked, today, unlocked, type Toast } from "./progress";
@@ -665,6 +666,7 @@ function navButtons(cw: number): { page: "themes" | "coins" | "shop"; label: str
   const step = (cw - 32) / list.length;
   return list.map((b, i) => ({ ...b, x: -cw / 2 + 16 + step * (i + 0.5), w: Math.min(160, step - 10) }));
 }
+const AD_CHOICES_Y = 232; // a text link on the main page, only where Google's consent tool is present
 const ACCT_Y = 104; // the account row on the main page: 68 tall
 function drawAccountRow(cw: number): void {
   const a = account();
@@ -758,6 +760,11 @@ export function drawSettings(dt: number): void {
     ctx.fillStyle = COLORS.dim;
     ctx.font = `500 12px ${ROUND}`;
     ctx.fillText(ui.settingsNote, 0, 262, cw - 40);
+    if (adChoicesAvailable()) {
+      ctx.fillStyle = BRAND.violet;
+      ctx.font = `700 13px ${ROUND}`;
+      ctx.fillText("Ad privacy choices", 0, AD_CHOICES_Y, cw - 40);
+    }
   } else if (page === "themes") {
     const first = ui.themePage * THEMES_PER_PAGE;
     THEMES.slice(first, first + THEMES_PER_PAGE).forEach((t, k) => {
@@ -1014,6 +1021,7 @@ export function settingsTap(lx: number, ly: number): boolean {
       }
       return false;
     }
+    if (adChoicesAvailable() && ly >= AD_CHOICES_Y - 14 && ly <= AD_CHOICES_Y + 14 && Math.abs(lx) <= 90) { showAdChoices(); haptics.tick(); return false; }
     if (signinOffered() && ly >= ACCT_Y && ly <= ACCT_Y + 68) { openAccount("settings"); haptics.tick(); return false; }
     const list = toggles();
     for (let i = 0; i < list.length; i++) {

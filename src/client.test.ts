@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as A from "./analytics.js";
-import { isPublisherId } from "./adLoader.js";
+import { adChoicesAvailable, adsState, isPublisherId, showAdChoices } from "./adLoader.js";
 
 function storage(): Storage {
   const m = new Map<string, string>();
@@ -81,5 +81,29 @@ describe("ad loader", () => {
   it("accepts only a real publisher id", () => {
     expect(isPublisherId("ca-pub-1234567890123456")).toBe(true);
     for (const bad of [undefined, "", "pub-123", "ca-pub-12", "ca-pub-1234567890<script>"]) expect(isPublisherId(bad)).toBe(false);
+  });
+});
+
+describe("ad privacy choices", () => {
+  it("is offered only when ads are ready and Google's consent tool is on the page", () => {
+    adsState.ready = false; adsState.blocked = false;
+    vi.stubGlobal("window", { googlefc: { showRevocationMessage: vi.fn() } });
+    expect(adChoicesAvailable()).toBe(false); // ads not loaded
+    adsState.ready = true;
+    expect(adChoicesAvailable()).toBe(true);
+    vi.stubGlobal("window", {});
+    expect(adChoicesAvailable()).toBe(false); // no consent tool
+    adsState.ready = false;
+  });
+
+  it("reopens the choices, and survives a tool that is not ready", () => {
+    const show = vi.fn();
+    vi.stubGlobal("window", { googlefc: { showRevocationMessage: show } });
+    showAdChoices();
+    expect(show).toHaveBeenCalledOnce();
+    vi.stubGlobal("window", { googlefc: { showRevocationMessage: () => { throw new Error("not ready"); } } });
+    expect(() => showAdChoices()).not.toThrow();
+    vi.stubGlobal("window", {});
+    expect(() => showAdChoices()).not.toThrow();
   });
 });
