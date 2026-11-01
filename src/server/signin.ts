@@ -40,7 +40,11 @@ export class ResendMailer implements Mailer {
         text: `Your Bun Blocks sign-in code is ${code}. It works for 10 minutes.\n\nIf you did not ask for it, ignore this email.`,
       }),
     });
-    if (!res.ok) throw new Error(`resend: HTTP ${res.status}`);
+    if (!res.ok) {
+      // Resend says why in the body (for example an invalid "from"); keep that for the server log. No secrets in it.
+      const why = await res.text().catch(() => "");
+      throw new Error(`resend: HTTP ${res.status} ${why.slice(0, 300)}`.trim());
+    }
   }
 }
 
@@ -65,7 +69,10 @@ export function signinFromEnv(env: Record<string, string | undefined> = process.
   const secret = env.AUTH_SECRET ?? "";
   if (secret.length < MIN_AUTH_SECRET) return null;
   let mailer: Mailer | null = null;
-  if (env.RESEND_API_KEY && env.EMAIL_FROM) mailer = new ResendMailer(env.RESEND_API_KEY, env.EMAIL_FROM);
+  // Values pasted into a dashboard often arrive with spaces or quotes around them; Resend rejects those.
+  const tidy = (v: string | undefined): string => (v ?? "").trim().replace(/^(["'])(.*)\1$/, "$2").trim();
+  const key = tidy(env.RESEND_API_KEY), from = tidy(env.EMAIL_FROM);
+  if (key && from) mailer = new ResendMailer(key, from);
   else if (env.EMAIL_FAKE === "1" && !env.VERCEL) mailer = fakeMailer ??= new FakeMailer();
   const googleClientId = env.GOOGLE_CLIENT_ID || null;
   return mailer || googleClientId ? { secret, mailer, googleClientId } : null;

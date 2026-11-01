@@ -5,7 +5,7 @@ import { coinKey } from "./coins";
 import { FakePaystack } from "./paystack";
 import { getPayments } from "./payments";
 import { confirmPurchase, startCheckout } from "./purchases";
-import { FakeMailer, getSave, maskEmail, putSave, signin, signinFromEnv, verifyGoogleToken, type SigninConfig } from "./signin";
+import { FakeMailer, ResendMailer, getSave, maskEmail, putSave, signin, signinFromEnv, verifyGoogleToken, type SigninConfig } from "./signin";
 import { MemoryStore } from "./store";
 
 const NOW = new Date("2026-10-27T12:00:00Z");
@@ -159,5 +159,20 @@ describe("cloud save", () => {
     const fresh = (await transferAccount(s.store, { player: id(1) }, NOW)).body.player as string;
     expect((await getSave(s.store, fresh)).body.data).toEqual(data);
     expect((await getSave(s.store, id(1))).status).toBe(410);
+  });
+});
+
+describe("Resend settings", () => {
+  const env = (extra: Record<string, string>): Record<string, string> => ({ AUTH_SECRET: "x".repeat(32), ...extra });
+  it("accepts settings pasted with quotes or spaces around them", () => {
+    const cfg = signinFromEnv(env({ RESEND_API_KEY: ' "re_abc" ', EMAIL_FROM: "  'Bun Blocks <play@bunblocks.app>'  " }));
+    expect(cfg?.mailer).toBeInstanceOf(ResendMailer);
+    expect((cfg!.mailer as unknown as { key: string; from: string }).key).toBe("re_abc");
+    expect((cfg!.mailer as unknown as { key: string; from: string }).from).toBe("Bun Blocks <play@bunblocks.app>");
+  });
+  it("puts Resend's reason in the error", async () => {
+    const res = new Response('{"message":"Invalid `from` field"}', { status: 400 });
+    const m = new ResendMailer("k", "bad", () => Promise.resolve(res));
+    await expect(m.sendCode("a@b.co", "123456")).rejects.toThrow(/HTTP 400.*Invalid `from` field/);
   });
 });
