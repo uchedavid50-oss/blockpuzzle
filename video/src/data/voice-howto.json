@@ -1,0 +1,21 @@
+{
+  "voice": "Bella",
+  "durations": {
+    "hook": 3.762,
+    "intro": 1.515,
+    "drag": 4.963,
+    "fit": 6.296,
+    "row": 2.586,
+    "region": 5.512,
+    "combo": 3.187,
+    "over": 2.691,
+    "share": 3.579,
+    "modes": 2.351,
+    "daily": 4.78,
+    "weekly": 3.892,
+    "journey": 3.474,
+    "coins": 3.239,
+    "stats": 2.691,
+    "end": 2.116
+  }
+}

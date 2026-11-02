@@ -1,0 +1,25 @@
+{
+  "name": "blockpuzzle-video",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "voice": "tsx scripts/voice.ts",
+    "capture:game": "tsx scripts/capture-game.ts",
+    "capture:admin": "tsx scripts/capture-admin.ts",
+    "studio": "remotion studio src/index.ts",
+    "render": "tsx scripts/render.ts"
+  },
+  "devDependencies": {
+    "@remotion/cli": "^4.0.530",
+    "@remotion/google-fonts": "^4.0.530",
+    "@remotion/media-utils": "^4.0.530",
+    "@remotion/renderer": "^4.0.530",
+    "@types/react": "^18.3.12",
+    "playwright": "^1.64.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.530",
+    "tsx": "^4.23.15",
+    "typescript": "^5.6.3"
+  }
+}

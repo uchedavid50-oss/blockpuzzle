@@ -1,0 +1,236 @@
+{
+  "fps": 30,
+  "scale": 2,
+  "width": 390,
+  "height": 844,
+  "layout": {
+    "cell": 43,
+    "boardX": 23,
+    "boardY": 108,
+    "trayY": 615
+  },
+  "clips": [
+    {
+      "name": "hook",
+      "frames": 156,
+      "events": [
+        {
+          "frame": 18,
+          "type": "down",
+          "x": 70,
+          "y": 648
+        },
+        {
+          "frame": 60,
+          "type": "up",
+          "x": 281,
+          "y": 409
+        }
+      ],
+      "marks": {
+        "clear": 60
+      }
+    },
+    {
+      "name": "drag",
+      "frames": 162,
+      "events": [
+        {
+          "frame": 15,
+          "type": "down",
+          "x": 70,
+          "y": 648
+        },
+        {
+          "frame": 126,
+          "type": "up",
+          "x": 173.5,
+          "y": 301.5
+        }
+      ],
+      "marks": {}
+    },
+    {
+      "name": "fit",
+      "frames": 162,
+      "events": [
+        {
+          "frame": 9,
+          "type": "down",
+          "x": 195,
+          "y": 648
+        },
+        {
+          "frame": 54,
+          "type": "up",
+          "x": 152,
+          "y": 387.5
+        },
+        {
+          "frame": 69,
+          "type": "down",
+          "x": 320,
+          "y": 648
+        },
+        {
+          "frame": 114,
+          "type": "up",
+          "x": 324,
+          "y": 215.5
+        }
+      ],
+      "marks": {
+        "refill": 114
+      }
+    },
+    {
+      "name": "row",
+      "frames": 123,
+      "events": [
+        {
+          "frame": 12,
+          "type": "down",
+          "x": 70,
+          "y": 648
+        },
+        {
+          "frame": 57,
+          "type": "up",
+          "x": 302.5,
+          "y": 495
+        }
+      ],
+      "marks": {
+        "clear": 57
+      }
+    },
+    {
+      "name": "region",
+      "frames": 135,
+      "events": [
+        {
+          "frame": 12,
+          "type": "down",
+          "x": 70,
+          "y": 648
+        },
+        {
+          "frame": 57,
+          "type": "up",
+          "x": 152,
+          "y": 323
+        }
+      ],
+      "marks": {
+        "clear": 57
+      }
+    },
+    {
+      "name": "combo",
+      "frames": 141,
+      "events": [
+        {
+          "frame": 12,
+          "type": "down",
+          "x": 70,
+          "y": 648
+        },
+        {
+          "frame": 57,
+          "type": "up",
+          "x": 173.5,
+          "y": 366
+        }
+      ],
+      "marks": {
+        "clear": 57
+      }
+    },
+    {
+      "name": "over",
+      "frames": 159,
+      "events": [
+        {
+          "frame": 12,
+          "type": "down",
+          "x": 70,
+          "y": 648
+        },
+        {
+          "frame": 57,
+          "type": "up",
+          "x": 259.5,
+          "y": 194
+        }
+      ],
+      "marks": {
+        "over": 57
+      }
+    },
+    {
+      "name": "share",
+      "frames": 93,
+      "events": [
+        {
+          "frame": 12,
+          "type": "tap",
+          "x": 195,
+          "y": 555
+        }
+      ],
+      "marks": {}
+    },
+    {
+      "name": "modes",
+      "frames": 315,
+      "events": [
+        {
+          "frame": 12,
+          "type": "tap",
+          "x": 76,
+          "y": 77
+        }
+      ],
+      "marks": {}
+    },
+    {
+      "name": "journey",
+      "frames": 147,
+      "events": [
+        {
+          "frame": 9,
+          "type": "tap",
+          "x": 195,
+          "y": 462
+        }
+      ],
+      "marks": {}
+    },
+    {
+      "name": "coins",
+      "frames": 135,
+      "events": [
+        {
+          "frame": 12,
+          "type": "tap",
+          "x": 195,
+          "y": 58
+        }
+      ],
+      "marks": {}
+    },
+    {
+      "name": "stats",
+      "frames": 135,
+      "events": [
+        {
+          "frame": 12,
+          "type": "tap",
+          "x": 195,
+          "y": 30
+        }
+      ],
+      "marks": {}
+    }
+  ]
+}
