@@ -9,7 +9,7 @@ screen, captions beside it. Everything here is read by the capture, voice and Re
 - Ink `#3d1a5c`, dim `#8d6aa8`, combo orange `#f28c00`.
 - Background: the candy wash `#ffd9ef` → `#d9c8ff` (the game's own backdrop), softened for video.
 - Type: rounded for titles ('Arial Rounded MT Bold' / Nunito), system sans for captions.
-- Name on screen: "Block Puzzle". Never mention Tetris.
+- Name on screen: "Bunblocks". Never mention Tetris.
 
 ## Video 1: How to play (players)
 - Portrait 1080x1920, 30 fps, about 70 s.

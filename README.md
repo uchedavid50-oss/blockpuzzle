@@ -1,4 +1,4 @@
-# Block Puzzle
+# Bunblocks
 
 An original 8×8 drag-and-drop block puzzle. Drag pieces from the tray onto the board and clear
 rows, columns and 2×4 regions. No rotating, no timer, no ads, no backend.
@@ -77,7 +77,7 @@ Everything here is off until configured, and none of it can change the rules or 
   Sales on the admin page are counted by the server when a payment is confirmed, not reported by browsers.
 - **Sign-in and cloud save** (optional for players, off until configured): `AUTH_SECRET` (at least 24
   characters; it keys the email hashes, so never change it once players have signed in) plus either or
-  both of: email codes via Resend (`RESEND_API_KEY`, `EMAIL_FROM` such as `Block Puzzle <play@yourdomain>`
+  both of: email codes via Resend (`RESEND_API_KEY`, `EMAIL_FROM` such as `Bunblocks <play@yourdomain>`
   on a domain verified in Resend), and Google (`GOOGLE_CLIENT_ID`, a Web OAuth client whose authorised
   JavaScript origins list the site). A signed-in device keeps a cloud save that merges with the account's
   (counters add up, bests take the higher), so two phones never overwrite each other. Signing in on a phone

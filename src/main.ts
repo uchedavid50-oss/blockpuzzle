@@ -382,8 +382,8 @@ function overHit(x: number, y: number): "share" | "again" | "mode" | "undo" | "b
 function shareContent(): { text: string; url: string } {
   const origin = location.origin;
   if (state.kind === "journey" && state.level)
-    return { text: `Block Puzzle \u00B7 Level ${state.level} ${state.won ? "\u2605".repeat(state.stars) : "(not cleared yet)"}\nCan you clear it?`, url: origin };
-  if (state.kind === "zen") return { text: `Block Puzzle zen: ${state.lines} lines cleared, no game over.`, url: origin };
+    return { text: `Bunblocks \u00B7 Level ${state.level} ${state.won ? "\u2605".repeat(state.stars) : "(not cleared yet)"}\nCan you clear it?`, url: origin };
+  if (state.kind === "zen") return { text: `Bunblocks zen: ${state.lines} lines cleared, no game over.`, url: origin };
   if (state.daily) {
     // The official first attempt is the result that gets shared, even after a practice run.
     const off = officialResult(state.daily);
@@ -391,13 +391,13 @@ function shareContent(): { text: string; url: string } {
     const score = off ? off.score : state.score;
     return {
       text: shareText({
-        title: `Block Puzzle \u00B7 ${state.daily}`, score, board, par: parFor(state.daily),
+        title: `Bunblocks \u00B7 ${state.daily}`, score, board, par: parFor(state.daily),
         streak: state.daily === today() ? streakNow() : 0, note: state.daily === today() ? undefined : "Archive",
       }),
       url: origin,
     };
   }
-  const title = state.kind === "weekly" && state.week ? `Block Puzzle \u00B7 Weekly ${state.week}` : "Block Puzzle";
+  const title = state.kind === "weekly" && state.week ? `Bunblocks \u00B7 Weekly ${state.week}` : "Bunblocks";
   const text = shareText({ title, score: state.score, board: boardEmoji(state.grid, colorGrid) }) + "\nBeat me on the exact same pieces!";
   // A random game's link carries its seed, so a friend plays the same pieces against my score.
   return { text, url: state.kind === "weekly" ? origin : challengeUrl(origin, state.seed, state.score) };
@@ -1650,7 +1650,7 @@ function maybeShowInstall(): void {
   const msg = document.createElement("span");
   msg.style.flex = "1";
   msg.textContent = installEvent
-    ? "Install Block Puzzle for quick, offline play."
+    ? "Install Bunblocks for quick, offline play."
     : "Add to Home Screen: tap Share, then \u201cAdd to Home Screen\u201d.";
   bar.append(msg);
 

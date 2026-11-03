@@ -6,11 +6,11 @@ const row = (y: number) => ({ x: 36, y, w: 318, h: 62 });
 
 export const howto: VideoSpec = {
   id: "howto",
-  title: "How to play Block Puzzle",
+  title: "How to play Bunblocks",
   orientation: "portrait",
   viewport: { w: 390, h: 844 },
   beats: [
-    { id: "hook", clip: "hook", from: 0, say: "Fill a row, a column, or a block of eight, and it clears.", caption: "Block Puzzle", zoom: { ...BOARD, s: 1.12, at: 0.8 }, sfx: ["clear"] },
+    { id: "hook", clip: "hook", from: 0, say: "Fill a row, a column, or a block of eight, and it clears.", caption: "Bunblocks", zoom: { ...BOARD, s: 1.12, at: 0.8 }, sfx: ["clear"] },
     { id: "intro", clip: "drag", from: 0, say: "Here's how to play." },
     { id: "drag", clip: "drag", from: "continue", step: 1, caption: "Drag a piece onto the board", say: "Drag a piece from the tray onto the board. A shadow shows where it will land." },
     { id: "fit", clip: "fit", from: 0, step: 2, caption: "Find where each piece fits", say: "Pieces don't rotate, so find the spot where each one fits. Use all three, and you get three more." },
@@ -27,7 +27,7 @@ export const howto: VideoSpec = {
     { id: "journey", clip: "journey", from: 0, caption: "Journey", chip: "Journey", say: "Journey takes you through levels, each with its own goal." },
     { id: "coins", clip: "coins", from: 0, step: 6, caption: "Earn and spend coins", chip: "Coins", say: "Earn coins as you play, and spend them in the coin shop." },
     { id: "stats", clip: "stats", from: 0, step: 7, caption: "See your stats and badges", chip: "Trophy", say: "Tap the trophy to see your stats and badges." },
-    { id: "end", say: "Block Puzzle. Have fun.", minSec: 5 },
+    { id: "end", say: "Bunblocks. Have fun.", minSec: 5 },
   ],
-  endCard: { title: "Block Puzzle", subtitle: "Fill it. Clear it. Again." },
+  endCard: { title: "Bunblocks", subtitle: "Fill it. Clear it. Again." },
 };

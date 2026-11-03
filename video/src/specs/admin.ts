@@ -7,11 +7,11 @@ import type { VideoSpec } from "./types";
 const PRIVATE = [{ x: 152, y: 122, w: 560, h: 36 }, { x: 286, y: 164, w: 210, h: 24 }, { x: 296, y: 305, w: 446, h: 495 }];
 export const admin: VideoSpec = {
   id: "admin",
-  title: "The Block Puzzle admin dashboard",
+  title: "The Bunblocks admin dashboard",
   orientation: "landscape",
   viewport: { w: 1280, h: 800 },
   beats: [
-    { id: "hook", clip: "overview", from: 0, caption: "Block Puzzle · Admin", say: "Every number about your game, on one page.", zoom: { x: 640, y: 260, s: 1.1, at: 0.4 } },
+    { id: "hook", clip: "overview", from: 0, caption: "Bunblocks · Admin", say: "Every number about your game, on one page.", zoom: { x: 640, y: 260, s: 1.1, at: 0.4 } },
     { id: "open", clip: "login", from: 0, step: 1, caption: "Open /admin.html", say: "Open slash admin dot html on your site." },
     { id: "token", clip: "login", from: "continue", step: 2, caption: "Enter your admin token", chip: "Load", say: "Paste the admin token from your server settings, and press Load.",
       spot: [{ at: 0, ref: "token" }], blur: [{ ref: "token" }] },
@@ -26,7 +26,7 @@ export const admin: VideoSpec = {
     { id: "status", clip: "payments", from: "continue", caption: "Payment status", say: "Each payment shows its amount and status, including refunds and disputes.",
       spot: [{ at: 0, ref: "status-col" }, { at: 2.4, ref: "ptotals" }], blur: PRIVATE },
     { id: "private", clip: "overview", from: 0, caption: "Anonymous by design", say: "Everything here is anonymous. No emails, and no personal data.", zoom: { x: 640, y: 300, s: 1.06, at: 0.2 } },
-    { id: "end", say: "Block Puzzle.", minSec: 4.5 },
+    { id: "end", say: "Bunblocks.", minSec: 4.5 },
   ],
-  endCard: { title: "Block Puzzle", subtitle: "Admin dashboard" },
+  endCard: { title: "Bunblocks", subtitle: "Admin dashboard" },
 };
