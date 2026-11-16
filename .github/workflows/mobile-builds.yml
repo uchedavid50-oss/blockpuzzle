@@ -84,6 +84,7 @@ jobs:
           path: artifacts/android/
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
       - name: Add Android download to run summary
         env:
           ARTIFACT_URL: ${{ steps.apk.outputs.artifact-url }}
@@ -136,6 +137,7 @@ jobs:
           path: artifacts/ios/
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
       - name: Add iOS download to run summary
         env:
           ARTIFACT_URL: ${{ steps.simulator.outputs.artifact-url }}
