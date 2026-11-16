@@ -192,3 +192,58 @@ Capacitor `server.url` at the live website: the packaged shell is the offline ap
 See [the migration report](docs/mobile-migration.md) for exact changes, validation results,
 compatibility limitations, device checks, and the production/store submission checklist.
 No production deployment or merge is part of this phase.
+
+### Download Android and iOS test builds
+
+Open [Mobile builds in GitHub Actions](https://github.com/uchedavid50-oss/blockpuzzle/actions/workflows/mobile-builds.yml),
+select a successful run for `mobile/capacitor-phase-one`, and download its **Artifacts** at the
+bottom of the run page (sign in to GitHub). The job summaries also contain download links.
+
+| Artifact | Contents | Where it runs |
+| --- | --- | --- |
+| `bunblocks-android-debug-<run>` | `bunblocks-debug.apk`, checksum, build info | Android 7.0+ device or emulator |
+| `bunblocks-ios-simulator-arm64-<run>` | `bunblocks-ios-simulator-arm64.tar.gz`, checksum, build info | iOS Simulator on an Apple silicon Mac with Xcode |
+
+The [workflow](.github/workflows/mobile-builds.yml) runs automatically on pushes to `mobile/**`
+and pull requests targeting `main`. Tests, the existing validation script, both Vite builds,
+and web/native boundary checks must pass before Android builds; iOS builds after Android.
+Artifacts expire after 14 days. Re-run a workflow or push a new mobile-branch commit to regenerate
+them. A **Run workflow** button becomes available once this workflow exists on the default
+branch; until then use the automatic mobile-branch push runs and **Re-run all jobs**.
+Nothing in this workflow merges code, deploys the website, or uploads to either store.
+It requires no signing secrets. Actions are pinned to commit SHAs, with read-only repository permissions.
+
+**Android:** unzip the downloaded artifact, transfer `bunblocks-debug.apk` to your Android
+device and open it. Allow installation from the file/browser app when Android asks.
+Alternatively, connect an emulator/device and run:
+
+```sh
+adb install -r bunblocks-debug.apk
+```
+
+This APK is signed with a development key, not a store release key. Each hosted runner can
+generate a different debug signing key, so an update from another run may require uninstalling
+the previous build. **Uninstalling removes local saves**: sync progress first if cloud saves
+are available, or keep the existing install until durable signing/backup is configured.
+Native online services still require the approved CORS deployment described in the migration report.
+Ads and purchases remain disabled.
+
+**iOS Simulator:** unzip the artifact, extract the tar archive, start a simulator in Xcode,
+then install and launch the app:
+
+```sh
+tar -xzf bunblocks-ios-simulator-arm64.tar.gz
+xcrun simctl install booted App.app
+xcrun simctl launch booted app.bunblocks.game
+```
+
+The `.app` is unsigned and built for an arm64 simulator; it cannot be installed on an iPhone
+or an Intel Mac simulator. A physical iPhone `.ipa` / TestFlight build needs the correct
+Apple Developer team, distribution certificate/private key, provisioning profile, and an
+export method. Configure those in a separate signing workflow using GitHub secrets/environments
+before creating device releases. Never commit signing keys or profiles.
+See [Apple's distribution guide](https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases).
+
+For local builds, `npm run android:build` creates
+`android/app/build/outputs/apk/debug/app-debug.apk`. Use `npm run ios:open` to open the native
+project in Xcode and build for a simulator or configure a development team for your iPhone.

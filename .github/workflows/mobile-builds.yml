@@ -1,0 +1,140 @@
+name: Mobile builds
+
+on:
+  push:
+    branches: ["mobile/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-builds-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate:
+    name: Tests and web/native validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run validate
+      - run: npm run build
+      - run: npm run build:native
+      - run: npm run check:mobile
+
+  android:
+    name: Android debug APK
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - run: npm ci
+      - run: npm run build:native
+      - run: npx cap sync android
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew --no-daemon :app:assembleDebug :app:testDebugUnitTest
+      - name: Package APK and checksum
+        run: |
+          mkdir -p artifacts/android
+          cp android/app/build/outputs/apk/debug/app-debug.apk artifacts/android/bunblocks-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose artifacts/android/bunblocks-debug.apk
+          cd artifacts/android
+          sha256sum bunblocks-debug.apk > SHA256SUMS.txt
+          printf 'Commit: %s\nRun: %s\n\nAndroid debug build for testing. Native ads and purchases are disabled.\nThe CI debug signing key can change between runs; see README before replacing an existing install.\n' \
+            "$GITHUB_SHA" "$GITHUB_RUN_ID" > BUILD-INFO.txt
+      - name: Upload Android APK
+        id: apk
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bunblocks-android-debug-${{ github.run_number }}
+          path: artifacts/android/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Add Android download to run summary
+        env:
+          ARTIFACT_URL: ${{ steps.apk.outputs.artifact-url }}
+        run: |
+          printf '### Android debug APK\n\n[Download APK artifact](%s), extract the ZIP and open `bunblocks-debug.apk` on Android.\n\nThis is a test build, not a Play Store release.\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
+
+  ios:
+    name: iOS simulator app (Apple silicon)
+    needs: android
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+          cache: npm
+      - run: xcodebuild -version
+      - run: npm ci
+      - run: npm run build:native
+      - run: npx cap sync ios
+      - name: Build unsigned simulator application
+        run: |
+          xcodebuild -quiet \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/bunblocks-ios" \
+            CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build
+      - name: Package simulator app and checksum
+        run: |
+          mkdir -p artifacts/ios
+          test -d "$RUNNER_TEMP/bunblocks-ios/Build/Products/Debug-iphonesimulator/App.app"
+          tar -czf artifacts/ios/bunblocks-ios-simulator-arm64.tar.gz \
+            -C "$RUNNER_TEMP/bunblocks-ios/Build/Products/Debug-iphonesimulator" App.app
+          cd artifacts/ios
+          shasum -a 256 bunblocks-ios-simulator-arm64.tar.gz > SHA256SUMS.txt
+          printf 'Commit: %s\nRun: %s\n\nUnsigned arm64 iOS Simulator app for Apple silicon Macs.\nNot an IPA and cannot be installed on an iPhone. See README for simulator installation and device signing requirements.\n' \
+            "$GITHUB_SHA" "$GITHUB_RUN_ID" > BUILD-INFO.txt
+      - name: Upload iOS simulator app
+        id: simulator
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bunblocks-ios-simulator-arm64-${{ github.run_number }}
+          path: artifacts/ios/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Add iOS download to run summary
+        env:
+          ARTIFACT_URL: ${{ steps.simulator.outputs.artifact-url }}
+        run: |
+          printf '### iOS simulator app\n\n[Download simulator artifact](%s) for an Apple silicon Mac with Xcode.\n\nThis unsigned simulator app cannot be installed on an iPhone. A device IPA requires Apple signing and provisioning. No store upload is performed.\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"

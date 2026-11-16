@@ -82,6 +82,24 @@ The APK is `android/app/build/outputs/apk/debug/app-debug.apk` (debug only, not 
 
 ## Results and known limits
 
+### GitHub Actions build artifacts
+
+`.github/workflows/mobile-builds.yml` adds a read-only build pipeline on the mobile branch.
+It runs the existing tests/validation and both web/native build checks before assembling a
+debug APK on Ubuntu (JDK 21, Android SDK 36), then an unsigned arm64 simulator `.app` on macOS
+26/Xcode 26.4. Each artifact includes its source commit, run ID and SHA-256 checksum; retention
+is 14 days. The iOS app is tarred to preserve executable permissions and links when downloading.
+It is not an installable device IPA. No signing secrets, store publishing, production deployment,
+merge, native advertisements or purchase activation are part of the workflow.
+
+See the README's download section for artifact names, installation steps, debug signing-key
+limitations and the default-branch requirement for manual workflow dispatch. CI compiles native
+applications; the earlier emulator gameplay/lifecycle checks still need the device QA matrix.
+The original phase-one file inventory below remains an inventory of that implementation commit;
+this workflow and these subsequent documentation changes are additions to it.
+
+### Phase-one implementation checks
+
 - Baseline: all 382 existing tests passed; the full existing validation script completed
   (90/90 journey levels bot-winnable, weekly goal sampling and all four region variants).
   A separate clean export of `origin/main` also passed the production build with the installed toolchain.
