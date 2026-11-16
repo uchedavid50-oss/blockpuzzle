@@ -28,7 +28,7 @@ public class BunblocksLaunchTest {
                 CountDownLatch done = new CountDownLatch(1);
                 AtomicReference<String> value = new AtomicReference<>("");
                 scenario.onActivity(activity -> activity.getBridge().getWebView().evaluateJavascript(
-                    "Boolean(document.querySelector('#game')?.getContext('2d').getImageData(100,100,1,1).data[3] > 0 && window.Capacitor?.isNativePlatform() && !document.querySelector('script[src*=adsbygoogle]'))",
+                    "Boolean(document.querySelector('#game')?.getContext('2d').getImageData(100,100,1,1).data.slice(0,3).some(v => v > 0) && window.Capacitor?.isNativePlatform() && !document.querySelector('script[src*=adsbygoogle]'))",
                     result -> { value.set(result); done.countDown(); }));
                 assertTrue(done.await(5, TimeUnit.SECONDS));
                 ready = "true".equals(value.get());

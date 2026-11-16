@@ -4,9 +4,11 @@
 import { shapeSize, type Shape } from "./board";
 import { PALETTE } from "./progress";
 import { settings } from "./settings";
+import { isNative } from "./platform";
+import { CanvasLayer, SpriteCache, renderScale } from "./renderCache";
 
 export const canvas = document.getElementById("game") as HTMLCanvasElement;
-export const ctx = canvas.getContext("2d")!;
+export const ctx = canvas.getContext("2d", isNative() ? { alpha: false, desynchronized: true } : undefined)!;
 
 // Layout, recomputed on resize. `export let` bindings are live: importers always see the latest values.
 export let dpr = 1;
@@ -19,9 +21,9 @@ export let trayY = 0;
 export let trayCell = 0;
 
 export function layoutView(size: number): void {
-  dpr = window.devicePixelRatio || 1;
   W = window.innerWidth;
   H = window.innerHeight;
+  dpr = renderScale(isNative(), W, H, window.devicePixelRatio || 1);
   canvas.width = W * dpr;
   canvas.height = H * dpr;
   canvas.style.width = `${W}px`;
@@ -57,8 +59,21 @@ export function mix(hex: string, to: number, a: number): string {
   return `rgb(${ch((n >> 16) & 255)},${ch((n >> 8) & 255)},${ch(n & 255)})`;
 }
 
+const blockSprites = new SpriteCache();
+const controlSprites = new SpriteCache();
+
 /** One glossy gem block. */
 export function block(x: number, y: number, s: number, hex: string): void {
+  if (isNative()) {
+    const key = `${s}:${hex}:${settings.patterns}:${PALETTE.indexOf(hex)}`;
+    blockSprites.draw(ctx, x, y, { x: -2, y: -2, width: s + 4, height: s + 4 }, dpr, key,
+      context => paintBlock(context, 0, 0, s, hex));
+    return;
+  }
+  paintBlock(ctx, x, y, s, hex);
+}
+
+function paintBlock(ctx: CanvasRenderingContext2D, x: number, y: number, s: number, hex: string): void {
   const g = Math.max(1, s * 0.04);
   const w = s - g * 2;
   const rr = s * 0.22;
@@ -97,12 +112,12 @@ export function block(x: number, y: number, s: number, hex: string): void {
   ctx.fill();
   if (settings.patterns) {
     const k = PALETTE.indexOf(hex);
-    if (k >= 0) pattern(k, x + s / 2, y + g + fh / 2, s * 0.2);
+    if (k >= 0) pattern(k, x + s / 2, y + g + fh / 2, s * 0.2, ctx);
   }
 }
 
 /** A mark for each colour, drawn on the block face when the colour-blind patterns setting is on. */
-function pattern(kind: number, cx: number, cy: number, r: number): void {
+function pattern(kind: number, cx: number, cy: number, r: number, ctx: CanvasRenderingContext2D): void {
   ctx.fillStyle = "rgba(0,0,0,0.38)";
   ctx.strokeStyle = "rgba(0,0,0,0.42)";
   ctx.lineWidth = Math.max(1.5, r * 0.28);
@@ -122,20 +137,20 @@ function pattern(kind: number, cx: number, cy: number, r: number): void {
 }
 
 /** An empty board cell: a soft sunken tile in the board's violet well. */
-export function emptyCell(x: number, y: number, s: number, alt = false): void {
+export function emptyCell(x: number, y: number, s: number, alt = false, context = ctx): void {
   const g = Math.max(1, s * 0.05);
-  const grad = ctx.createLinearGradient(x, y, x, y + s);
+  const grad = context.createLinearGradient(x, y, x, y + s);
   grad.addColorStop(0, alt ? "rgba(40,14,90,0.55)" : "rgba(30,10,72,0.55)");
   grad.addColorStop(1, alt ? "rgba(120,80,220,0.42)" : "rgba(100,64,200,0.38)");
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.roundRect(x + g, y + g, s - g * 2, s - g * 2, s * 0.24);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.14)"; // lit lower lip
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.roundRect(x + g + 0.5, y + g + 1.5, s - g * 2 - 1, s - g * 2 - 1, s * 0.24);
-  ctx.stroke();
+  context.fillStyle = grad;
+  context.beginPath();
+  context.roundRect(x + g, y + g, s - g * 2, s - g * 2, s * 0.24);
+  context.fill();
+  context.strokeStyle = "rgba(255,255,255,0.14)"; // lit lower lip
+  context.lineWidth = 1;
+  context.beginPath();
+  context.roundRect(x + g + 0.5, y + g + 1.5, s - g * 2 - 1, s - g * 2 - 1, s * 0.24);
+  context.stroke();
 }
 
 export function drawShape(shape: Shape, x: number, y: number, s: number, hex: string): void {
@@ -166,6 +181,15 @@ export function label(text: string, x: number, y: number, align: CanvasTextAlign
 
 /** A small glossy candy pill with a white rim: violet normally, gold when it wants attention. */
 export function pill(r: { x: number; y: number; w: number; h: number }, text: string, hot: boolean): void {
+  if (isNative()) {
+    controlSprites.draw(ctx, r.x, r.y, { x: -16, y: -16, width: r.w + 32, height: r.h + 32 }, dpr,
+      `pill:${r.w}:${r.h}:${text}:${hot}`, context => paintPill(context, { ...r, x: 0, y: 0 }, text, hot));
+    return;
+  }
+  paintPill(ctx, r, text, hot);
+}
+
+function paintPill(ctx: CanvasRenderingContext2D, r: { x: number; y: number; w: number; h: number }, text: string, hot: boolean): void {
   const [hi, lo] = hot ? ["#ffe066", "#f59a00"] : ["#b38aff", BRAND.deep];
   ctx.save();
   ctx.shadowColor = "rgba(60,10,90,0.25)";
@@ -270,7 +294,19 @@ export const CANDY = {
 export type Candy = keyof typeof CANDY;
 
 /** The page behind every screen: a soft candy gradient with slowly drifting light. */
+const backdropLayer = new CanvasLayer();
 export function candyBackdrop(t: number, top = "#ffd9ef", bottom = "#d9c8ff"): void {
+  if (isNative()) {
+    // The light moves slowly; rasterize it at 10 Hz while gameplay continues at display cadence.
+    const tick = reduceMotion ? 0 : Math.floor(t * 10);
+    backdropLayer.draw(ctx, { x: 0, y: 0, width: W, height: H }, dpr, `${tick}:${top}:${bottom}`,
+      context => paintBackdrop(context, tick / 10, top, bottom));
+    return;
+  }
+  paintBackdrop(ctx, t, top, bottom);
+}
+
+function paintBackdrop(ctx: CanvasRenderingContext2D, t: number, top: string, bottom: string): void {
   const g = ctx.createLinearGradient(0, 0, 0, H);
   g.addColorStop(0, top);
   g.addColorStop(1, bottom);
@@ -343,6 +379,16 @@ export function bubbleText(text: string, x: number, y: number, size: number, fil
 
 /** A fat glossy pill button with a white rim. `press` (0..1) squashes it while held. */
 export function candyButton(cx: number, cy: number, w: number, h: number, text: string, kind: Candy, press = 0, size = h * 0.42): void {
+  if (isNative() && press === 0) {
+    controlSprites.draw(ctx, cx, cy, { x: -w / 2 - 32, y: -h / 2 - 32, width: w + 64, height: h + 72 }, dpr,
+      `button:${w}:${h}:${text}:${kind}:${size}`, context => paintCandyButton(context, 0, 0, w, h, text, kind, 0, size));
+    return;
+  }
+  paintCandyButton(ctx, cx, cy, w, h, text, kind, press, size);
+}
+
+function paintCandyButton(ctx: CanvasRenderingContext2D, cx: number, cy: number, w: number, h: number, text: string,
+  kind: Candy, press: number, size: number): void {
   const [hi, mid, lo] = CANDY[kind];
   ctx.save();
   ctx.translate(cx, cy);

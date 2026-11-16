@@ -1,3 +1,4 @@
+import { CanvasLayer } from "./renderCache";
 import { isNative, publicOrigin } from "./platform";
 import { startNativeLifecycle, shareNative } from "./native";
 import { PERFECT_BONUS, REGION_COUNT, REGION_H, REGION_W, SIZE, canPlace, canPlaceAnywhere, clearCells, clearedCells, emptyGrid, fullestLine, hasMoves, isEmpty, place, regionCells, regionOf, shapeSize, type Grid, type Shape } from "./board";
@@ -1230,7 +1231,7 @@ function drawControls(): void {
   }
 }
 
-function drawBoard(): void {
+function paintBoardBase(ctx: CanvasRenderingContext2D, includeCells = true): void {
   const bw = cell * SIZE;
   // A candy frame: white rim, a glossy violet band with a thick lower edge, and a deep well inside.
   ctx.save();
@@ -1276,12 +1277,32 @@ function drawBoard(): void {
     ctx.stroke();
   }
 
+  if (includeCells) {
+    for (let r = 0; r < SIZE; r++)
+      for (let c = 0; c < SIZE; c++)
+        if (!state.grid[r]![c]) emptyCell(boardX + c * cell, boardY + r * cell, cell,
+          (regionOf(r, c) + Math.floor(regionOf(r, c) / 2)) % 2 === 0, ctx);
+  }
+}
+
+const boardLayer = new CanvasLayer();
+function drawBoard(): void {
+  const native = isNative();
+  if (native) {
+    // Cache the frame, blurred shadow and empty cells until the board or layout changes.
+    const padding = 64;
+    boardLayer.draw(ctx, { x: boardX - padding, y: boardY - padding,
+      width: cell * SIZE + padding * 2, height: cell * SIZE + padding * 2 }, dpr, state.grid, paintBoardBase);
+  } else paintBoardBase(ctx, false);
   for (let r = 0; r < SIZE; r++)
     for (let c = 0; c < SIZE; c++) {
       const x = boardX + c * cell;
       const y = boardY + r * cell;
       const ci = colorGrid[r]![c]!;
-      if (!state.grid[r]![c]) { emptyCell(x, y, cell, (regionOf(r, c) + Math.floor(regionOf(r, c) / 2)) % 2 === 0); continue; }
+      if (!state.grid[r]![c]) {
+        if (!native) emptyCell(x, y, cell, (regionOf(r, c) + Math.floor(regionOf(r, c) / 2)) % 2 === 0);
+        continue;
+      }
       // Landing spring: drops in oversized, squashes under, settles. Then a quick white flash.
       const pp = 1 - pop[r]![c]!;
       const sc = reduceMotion ? 1 : 1 + 0.26 * Math.exp(-4.4 * pp) * Math.cos(pp * Math.PI * 2.4);

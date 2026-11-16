@@ -127,7 +127,7 @@ this workflow and these subsequent documentation changes are additions to it.
   running API yet. Offline gameplay works independently.
 - No native ad or purchase SDK is active. Google native auth, incoming app links, durable storage
   migration, physical-device sharing and comprehensive device QA remain next-phase work.
-- Generated launcher icons/splashes are placeholders. App identifiers and release configuration
+- Generated splash screens are placeholders; launcher icons now use the web logo. App identifiers and release configuration
   need owner confirmation. The six toolchain audit findings are unresolved (see checklist).
 
 Exact source/project files are listed in [mobile-files.txt](mobile-files.txt). Bundled web assets,
@@ -159,7 +159,8 @@ Gradle/Xcode output and device-local configuration are ignored and rebuilt, not 
       npm audit currently reports 6 development-tool findings (3 moderate, 1 high, 2 critical).
       Do not expose dev/test servers publicly. No automatic major upgrade was applied here.
 - [ ] Confirm bundle/application IDs, app name, versioning, minimum OS support and ownership accounts.
-      Replace generated Capacitor icons/splash screens with Bunblocks assets in all required sizes.
+      Replace the remaining generated Capacitor splash screens with Bunblocks assets in all required sizes.
+      Native launcher icons now derive from the existing web logo.
 - [ ] Configure Android release signing outside source control, create/test AAB, Play internal track,
       prelaunch report, target API compliance, content rating, Data Safety and account deletion flow.
 - [ ] Configure iOS team/signing, archive/TestFlight, device orientations, App Privacy answers,
@@ -171,3 +172,37 @@ Gradle/Xcode output and device-local configuration are ignored and rebuilt, not 
 
 Official references: [Capacitor setup](https://capacitorjs.com/docs/getting-started/environment-setup),
 [configuration](https://capacitorjs.com/docs/config), [App lifecycle](https://capacitorjs.com/docs/apis/app).
+
+## Native performance and icon follow-up
+
+A Redmi Note 14 report identified lag throughout the native build. The original renderer repainted
+at the full hardware pixel ratio and recreated static shadows, cell gradients, blocks and controls
+on every frame. Native builds now request an opaque/desynchronized Canvas, cap the raster to one
+million pixels / 2× density, and reuse board/background layers plus bounded block/control sprites.
+Layer invalidation includes content, layout and scale; sprite storage is capped at 48 entries per
+pool. Moves, undo, patterns, themes and resize refresh the applicable artwork. Only the slowly
+moving background light uses a 10 Hz raster update; pointer handling, game animations and the
+existing animation loop remain at display cadence. Web resolution/drawing and all rules are unchanged.
+
+Eight-second before/after measurements on the same 411×845 CSS-pixel Android emulator and saved
+board, using its software graphics backend:
+
+| Measurement | Before | After |
+| --- | --- | --- |
+| Canvas backing pixels | 1078×2218 | 697×1433 |
+| Average animation-frame interval | 160.2 ms | 45.2 ms |
+| 95th percentile interval | 300.0 ms | 66.7 ms |
+
+This is about 58% fewer pixels and 72% lower average frame time in this emulator test. It is a
+relative software-renderer comparison, not a measured Redmi frame rate or a promise of 60 FPS.
+The owner still needs to verify responsiveness on the reported physical phone.
+
+The Android legacy/adaptive launcher assets and opaque 1024px iOS app icon were regenerated from
+`public/icon-512.png`. Android's foreground respects its adaptive-icon safe region, with a matching
+background. `scripts/make-mobile-icons.swift` reproduces the assets on macOS without replacing the
+logo or changing browser icons. Generated splash-screen artwork remains a separate store-readiness task.
+
+Validation: all 394 tests pass, including five raster-budget/cache-invalidation/storage-bound tests.
+Browser/native production builds and the web/native ad checks pass; Android APK and iOS simulator
+builds pass. Real native placement, undo and offline process-death save restoration were checked
+against the existing save/move-log format.

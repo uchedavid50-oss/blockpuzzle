@@ -247,3 +247,20 @@ See [Apple's distribution guide](https://developer.apple.com/documentation/xcode
 For local builds, `npm run android:build` creates
 `android/app/build/outputs/apk/debug/app-debug.apk`. Use `npm run ios:open` to open the native
 project in Xcode and build for a simulator or configure a development team for your iPhone.
+
+### Native rendering and launcher artwork
+
+Native builds cap Canvas raster resolution to a one-million-pixel budget (at most 2× density),
+without changing CSS layout, touch coordinates or game rules. Board frames/empty cells, repeated
+blocks and controls reuse bounded raster caches. Background light is rasterized at 10 Hz while
+input and gameplay animations continue at display cadence. Browser rendering keeps its existing
+resolution and drawing path.
+
+Android launcher icons (legacy and adaptive) and the iOS 1024px icon derive from the existing
+`public/icon-512.png` logo. To regenerate them on macOS after changing that source:
+
+```sh
+swift scripts/make-mobile-icons.swift
+```
+
+Regeneration changes only native launcher assets; it does not change the website icons or AdSense tag.
