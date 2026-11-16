@@ -1,3 +1,5 @@
+import { isNative, publicOrigin } from "./platform";
+import { startNativeLifecycle, shareNative } from "./native";
 import { PERFECT_BONUS, REGION_COUNT, REGION_H, REGION_W, SIZE, canPlace, canPlaceAnywhere, clearCells, clearedCells, emptyGrid, fullestLine, hasMoves, isEmpty, place, regionCells, regionOf, shapeSize, type Grid, type Shape } from "./board";
 import { drawTray, shapeAt, shapeIndex } from "./pieces";
 import { challengeUrl, randomSeed, type Challenge } from "./challenge";
@@ -393,7 +395,7 @@ const challengeable = (): boolean => state.kind === "classic" && !state.daily &&
 
 /** The text and link to share for this game: a small emoji picture of the board, not just a number. */
 function shareContent(): { text: string; url: string } {
-  const origin = location.origin;
+  const origin = publicOrigin();
   if (state.kind === "journey" && state.level)
     return { text: `Bun Blocks \u00B7 Level ${state.level} ${state.won ? "\u2605".repeat(state.stars) : "(not cleared yet)"}\nCan you clear it?`, url: origin };
   if (state.kind === "zen") return { text: `Bun Blocks zen: ${state.lines} lines cleared, no game over.`, url: origin };
@@ -423,7 +425,9 @@ function shareContent(): { text: string; url: string } {
 async function shareScore(): Promise<void> {
   const { text, url } = shareContent();
   try {
-    if (navigator.share) {
+    if (isNative()) {
+      await shareNative(text, url);
+    } else if (navigator.share) {
       await navigator.share({ text, url });
     } else {
       await navigator.clipboard.writeText(`${text}\n${url}`);
@@ -1067,6 +1071,7 @@ canvas.addEventListener("pointerup", (e) => {
 canvas.addEventListener("pointercancel", () => { drag = null; mapCancel(); });
 canvas.addEventListener("wheel", (e) => { if (mapUi.on) { e.preventDefault(); mapWheel(e.deltaY); } }, { passive: false });
 window.addEventListener("blur", save);
+void startNativeLifecycle(() => { save(); drag = null; mapCancel(); });
 document.addEventListener("visibilitychange", () => { if (document.hidden) save(); });
 
 // ---- Rendering ------------------------------------------------------------------
@@ -1679,7 +1684,7 @@ layout();
 requestAnimationFrame(frame);
 
 // Production only: in dev a service worker happily serves yesterday's bundle back to you.
-if (import.meta.env.PROD && "serviceWorker" in navigator)
+if (!isNative() && import.meta.env.PROD && "serviceWorker" in navigator)
   window.addEventListener("load", () => void navigator.serviceWorker.register("/sw.js").catch(() => {}));
 
 // ---- Install nudge ---------------------------------------------------------------
@@ -1705,7 +1710,7 @@ function dismissedInstall(): boolean {
 }
 
 function maybeShowInstall(): void {
-  if (installShown || standalone || moves < 6 || dismissedInstall()) return;
+  if (isNative() || installShown || standalone || moves < 6 || dismissedInstall()) return;
   if (!installEvent && !iosSafari) return;
   installShown = true;
 

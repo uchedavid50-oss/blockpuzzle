@@ -162,3 +162,33 @@ runs the storage contract against the real database, and `STORE=postgres npm run
 `npx vite-node scripts/backup.ts` (after `vercel env pull .env.local`) saves every Redis key to `backups/redis-<date>.json`
 (git-ignored; it holds player data, so keep it private). `scripts/restore.ts <file> --yes` puts it back and replaces
 keys of the same name. Anonymous distinct-count statistics cannot be exported and start counting again.
+
+## Android and iOS (Capacitor phase one)
+
+The browser release still uses `npm run build` → `dist/`. Native builds use
+`npm run build:native` → `dist-native/`, bundled inside the application for offline play.
+The native build disables AdSense, Paystack checkout, Google browser sign-in, PWA installation,
+and service workers. Ads and native purchases stay disabled pending verified integrations.
+The existing Canvas game, game rules, scoring, modes and replay verification are shared unchanged.
+
+```sh
+npm ci
+npm test
+npm run validate
+npm run build
+npm run cap:sync
+npm run check:mobile
+npm run android:build
+npm run android:open
+# After Android verification:
+npm run ios:open
+```
+
+Use Node 22+, the Android Studio JDK (21+), Android SDK 36, and Xcode 26+.
+`ANDROID_HOME` must point to the SDK; use `JAVA_HOME` for Android Studio's bundled JDK.
+Run `npx cap sync` after pulling dependencies or rebuilding native assets. Never point
+Capacitor `server.url` at the live website: the packaged shell is the offline application.
+
+See [the migration report](docs/mobile-migration.md) for exact changes, validation results,
+compatibility limitations, device checks, and the production/store submission checklist.
+No production deployment or merge is part of this phase.

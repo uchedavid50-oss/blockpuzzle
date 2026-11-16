@@ -10,9 +10,17 @@
     "par": "vite-node scripts/make-par.ts",
     "validate": "vite-node scripts/validate.ts",
     "levels": "vite-node scripts/make-levels.ts",
-    "dev:api": "vite-node scripts/dev-api.ts"
+    "dev:api": "vite-node scripts/dev-api.ts",
+    "build:native": "tsc --noEmit && vite build --mode native",
+    "cap:sync": "npm run build:native && cap sync",
+    "android:build": "npm run cap:sync && cd android && ./gradlew assembleDebug",
+    "android:open": "cap open android",
+    "ios:open": "cap open ios",
+    "check:mobile": "node scripts/check-mobile-build.mjs",
+    "android:test": "cd android && ./gradlew :app:connectedDebugAndroidTest"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.6.2",
     "@neon/config": "^1.9.3",
     "@neon/env": "^1.6.4",
     "@types/node": "^26.6.5",
@@ -21,6 +29,11 @@
     "vitest": "^2.1.0"
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.6.2",
+    "@capacitor/ios": "^8.6.2",
+    "@capacitor/share": "^8.0.3",
     "@neondatabase/serverless": "^1.2.0"
   }
 }

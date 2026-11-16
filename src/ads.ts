@@ -1,3 +1,4 @@
+import { isNative } from "./platform";
 // Ad placement, wrapped so the game never talks to an ad network directly.
 //
 // Two rules this module exists to enforce:
@@ -183,6 +184,8 @@ export function h5Provider(): AdProvider {
 
 /** Pick a provider. Returns `nullProvider` unless the Ad Placement API is actually present. */
 export function provider(): AdProvider {
+  // AdMob must implement AdProvider after consent and native completion callbacks are tested.
+  if (isNative()) return nullProvider;
   try {
     return h5Provider();
   } catch {

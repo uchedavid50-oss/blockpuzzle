@@ -1,3 +1,4 @@
+import { apiUrl, isNative } from "./platform";
 // Anonymous, self-hosted analytics. No third-party SDK, no runtime dependency, no cross-site id.
 //
 // Design rules, matching the leaderboard client:
@@ -143,12 +144,13 @@ export function flush(): void {
   const body = JSON.stringify(envelope(batch));
   try {
     // sendBeacon survives the page being closed, which keeps the last session_end honest.
-    if (navigator.sendBeacon?.(endpoint, new Blob([body], { type: "application/json" }))) return;
+    if (!isNative() && navigator.sendBeacon?.(endpoint, new Blob([body], { type: "application/json" }))) return;
   } catch {
     /* fall through to fetch */
   }
   try {
-    void fetch(endpoint, {
+    void fetch(apiUrl(endpoint), {
+      ...(isNative() ? { credentials: "omit" as const, redirect: "error" as const } : {}),
       method: "POST",
       headers: { "content-type": "application/json" },
       body,

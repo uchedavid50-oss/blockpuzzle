@@ -1,3 +1,4 @@
+import { webCheckoutAllowed, nativePurchases } from "./purchases";
 // The game's side of buying: start a checkout, and confirm one when the player comes back. All prices
 // and all verification live on the server; this only carries a sku out and an answer back.
 
@@ -78,6 +79,7 @@ export async function claimCoins(): Promise<number> {
 
 /** Send the player to Paystack's checkout page for one item or coin pack. */
 export async function beginCheckout(sku: Sku | PackId, currency = "NGN"): Promise<Outcome> {
+  if (!webCheckoutAllowed()) return nativePurchases.purchase(sku);
   if (!isSku(sku) && !isPack(sku)) return { ok: false, message: "That item is not for sale." };
   try {
     const { status, data } = await postJson("/api/checkout", { player: getPlayer().id, sku, currency });
@@ -91,6 +93,7 @@ export async function beginCheckout(sku: Sku | PackId, currency = "NGN"): Promis
 
 /** If the page was opened by returning from checkout, confirm the payment. Null otherwise. */
 export async function handleReturn(search: string, replaceUrl = true): Promise<Outcome | null> {
+  if (!webCheckoutAllowed()) return null;
   const q = new URLSearchParams(search);
   const ref = q.get("reference") ?? q.get("trxref");
   if (q.get("shop") !== "return" || !ref) return null;

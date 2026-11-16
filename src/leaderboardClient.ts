@@ -1,3 +1,4 @@
+import { apiUrl, isNative } from "./platform";
 // The game's side of the leaderboard: a private player id, and calls to the /api routes. Everything
 // here fails soft: if the network or the server is unavailable, the game simply hides the feature.
 
@@ -48,7 +49,7 @@ export async function call(path: string, init?: RequestInit): Promise<Response> 
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 8000);
   // no-store: the server lets shared caches keep boards for a few seconds, but this player must always see their own just-posted score.
-  try { return await fetch(path, { ...init, cache: "no-store", signal: ctl.signal }); } finally { clearTimeout(timer); }
+  try { return await fetch(apiUrl(path), { ...init, ...(isNative() ? { credentials: "omit" as const, redirect: "error" as const } : {}), cache: "no-store", signal: ctl.signal }); } finally { clearTimeout(timer); }
 }
 
 export async function checkLeaderboard(): Promise<void> {
@@ -57,9 +58,9 @@ export async function checkLeaderboard(): Promise<void> {
     const d = r.ok ? ((await r.json()) as { leaderboard?: boolean; analytics?: boolean; shop?: boolean; currencies?: string[]; signin?: { email?: unknown; google?: unknown } }) : {};
     lb.available = d.leaderboard === true;
     lb.analytics = d.analytics === true;
-    lb.shop = d.shop === true;
+    lb.shop = !isNative() && d.shop === true;
     if (Array.isArray(d.currencies)) lb.currencies = d.currencies.filter((c) => typeof c === "string");
-    lb.signin = { email: d.signin?.email === true, google: typeof d.signin?.google === "string" ? d.signin.google : null };
+    lb.signin = { email: d.signin?.email === true, google: !isNative() && typeof d.signin?.google === "string" ? d.signin.google : null };
   } catch { lb.available = false; lb.analytics = false; lb.shop = false; }
 }
 

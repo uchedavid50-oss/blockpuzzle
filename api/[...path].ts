@@ -1,3 +1,4 @@
+import { nativeCors } from "../src/server/cors.js";
 // One serverless function for the whole API. The route modules live in routes/ (one file per endpoint,
 // each exporting GET and/or POST); this dispatches by path. A single function keeps the project inside
 // Vercel's Hobby-plan limit of 12 functions, which separate files per route had exceeded.
@@ -54,5 +55,7 @@ async function dispatch(request: Request): Promise<Response> {
   return handler(request);
 }
 
-export const GET = dispatch;
-export const POST = dispatch;
+const handle = (request: Request): Promise<Response> => nativeCors(request, dispatch);
+export const GET = handle;
+export const POST = handle;
+export const OPTIONS = handle;

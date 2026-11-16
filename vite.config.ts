@@ -10,4 +10,15 @@ const proxy = {
       p.on("proxyReq", (r, q) => r.setHeader("x-forwarded-host", q.headers.host ?? "localhost")),
   },
 };
-export default defineConfig({ server: { proxy }, preview: { proxy } });
+export default defineConfig(({ mode }) => ({
+  server: { proxy }, preview: { proxy },
+  build: { outDir: mode === "native" ? "dist-native" : "dist" },
+  plugins: [{
+    name: "native-html",
+    transformIndexHtml(html) {
+      if (mode !== "native") return html;
+      return html.replace(/<script async src="https:\/\/pagead2[^>]*><\/script>/g, "")
+        .replace(/<link rel="manifest"[^>]*>/g, "");
+    },
+  }],
+}));

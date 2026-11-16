@@ -1,3 +1,4 @@
+import { isNative } from "./platform";
 // The sign-in sheet. Unlike the rest of the game's screens it is HTML, not canvas: typing an email and a
 // code needs real inputs (the phone's keyboard, autofill of one-time codes), and Google's button must be
 // rendered by Google's own script. Styled to match the candy sheets drawn in gfx.ts.
@@ -119,7 +120,7 @@ function signInView(sheet: HTMLElement, why: Why, onDone?: () => void): void {
 
   const parts: Node[] = [el("h2", { textContent: why === "lost" ? "Sign in again" : "Save your progress" }), el("p", { textContent: INTRO[why] })];
 
-  if (lb.signin.google) {
+  if (!isNative() && lb.signin.google) {
     const box = el("div", { className: "google" });
     parts.push(box);
     void loadGoogle().then((ok) => {
@@ -138,7 +139,7 @@ function signInView(sheet: HTMLElement, why: Why, onDone?: () => void): void {
   }
 
   if (lb.signin.email) {
-    if (lb.signin.google) parts.push(el("div", { className: "or", textContent: "or use your email" }));
+    if (!isNative() && lb.signin.google) parts.push(el("div", { className: "or", textContent: "or use your email" }));
     const email = el("input", { type: "email", placeholder: "you@example.com", autocomplete: "email", inputMode: "email", required: true });
     const code = el("input", { className: "code", placeholder: "••••••", autocomplete: "one-time-code", inputMode: "numeric", maxLength: 6 });
     code.hidden = true;
