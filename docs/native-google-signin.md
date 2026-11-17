@@ -1,7 +1,7 @@
 # Native Google sign-in
 
-Implemented on `mobile/capacitor-phase-one`. Production activation and real-account Android/iPhone
-testing are still required. Offline gameplay does not require Google or an account. Native ads
+Implemented on `mobile/capacitor-phase-one` and activated in production with owner approval.
+Real-account Android/iPhone testing is still required. Offline gameplay does not require Google or an account. Native ads
 and purchases remain disabled. The existing website Google client is unchanged.
 
 ## Public client configuration
@@ -21,10 +21,11 @@ For local native builds export `VITE_GOOGLE_IOS_CLIENT_ID` to the iOS ID above b
 `npm run cap:sync`. The build script generates the matching `GIDClientID` and reversed callback
 scheme in Info.plist. Without that setting, iOS Google sign-in stays unavailable.
 
-## Server activation (requires production deployment approval)
+## Production configuration
 
-Set these on the production Vercel `blockpuzzle` project, then deploy the reviewed backend and
-native CORS changes. Do not replace `GOOGLE_CLIENT_ID` or rotate `AUTH_SECRET`.
+These four values are set on the production Vercel `blockpuzzle` project. The reviewed backend
+and native CORS changes were deployed from commit `7e63ec4839ff1bc7759946fa16837c8673cce575`
+with owner approval, without merging the branch. Do not replace `GOOGLE_CLIENT_ID` or rotate `AUTH_SECRET`.
 
 ```dotenv
 GOOGLE_NATIVE_ENABLED=1
@@ -86,8 +87,15 @@ Signing SHA-1 and any distinct upload/test certificate before store distribution
   unsigned arm64 iOS Simulator build pass. Browser AdSense markup stays present.
 - Signed APK instrumentation passes on the Android 17 emulator with Wi-Fi and mobile data
   disabled: packaged Canvas renders, Capacitor is native and no AdSense script is loaded.
-- Before activation: review/deploy the backend and exact native-origin CORS support with approval;
-  check live health and allowed/disallowed OPTIONS responses. No production deployment is included.
+- Approved production deployment: `dpl_28c8S1QW7ZncRCQ1ogo1DNpde79w` serves `www.bunblocks.app`.
+  Live health exposes the native clients and preserves the website client; both native origins
+  pass preflight (204), an unrelated origin is rejected (403), both platforms receive fresh
+  sign-in nonces, and invalid credentials are rejected (401) with CORS headers. The website's
+  original AdSense publisher script, `ads.txt` and privacy page were verified. No real Google
+  account login or cloud-save mutation was performed by these smoke checks.
+- GitHub build run [44048578318](https://github.com/uchedavid50-oss/blockpuzzle/actions/runs/44048578318)
+  passed validation, Android APK and iOS simulator jobs. It produced an Android APK whose independently verified SHA-1/SHA-256 match the registered CI
+  identity. Download `bunblocks-android-debug-6` from that run for the first Google-enabled build.
 - Test on the Redmi Note 14: account picker, cancellation, returning from background, first login,
   repeat login, existing web-account restoration, save merge, offline restart and reconnect.
 - Test the same on a signed physical iPhone. The simulator build does not prove device OAuth.

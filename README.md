@@ -193,7 +193,8 @@ Capacitor `server.url` at the live website: the packaged shell is the offline ap
 
 See [the migration report](docs/mobile-migration.md) for exact changes, validation results,
 compatibility limitations, device checks, and the production/store submission checklist.
-No production deployment or merge is part of this phase.
+The subsequent native Google backend activation was approved and deployed as recorded in
+[native Google setup](docs/native-google-signin.md). The mobile branch has not been merged.
 
 ### Download Android and iOS test builds
 

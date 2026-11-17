@@ -123,12 +123,13 @@ this workflow and these subsequent documentation changes are additions to it.
   its data. Running unscoped `connectedDebugAndroidTest` also invokes third-party Capacitor plugin
   instrumentation and hit duplicate Kotlin standard-library classes. The documented app-specific
   `:app:connectedDebugAndroidTest` passes; this does not assert plugin-library instrumentation passes.
-- Read-only production checks: apex API OPTIONS redirects 307 to `www`; canonical host OPTIONS
-  returns 405 without CORS. The new server support is local to this branch until approved deployment.
-  Online native auth/cloud/leaderboard flows cannot be claimed as end-to-end verified against the
-  running API yet. Offline gameplay works independently.
-- No native ad or purchase SDK is active. Native Google implementation is complete but awaits
-  approved backend activation and real-account device QA. Incoming app links, durable storage
+- Initial phase-one production checks found missing CORS. The subsequent approved deployment
+  of `7e63ec4` enables native CORS and Google authentication configuration; allowed/disallowed
+  preflights, nonce issuance and invalid-token rejection now pass against the live API.
+  Real-account authentication/cloud/leaderboard end-to-end device QA remains outstanding.
+  See [the activation record](native-google-signin.md). Offline gameplay works independently.
+- No native ad or purchase SDK is active. Native Google implementation and approved backend
+  activation are complete; real-account device QA is pending. Incoming app links, durable storage
   migration, physical-device sharing and comprehensive device QA remain next-phase work.
 - Generated splash screens are placeholders; launcher icons now use the web logo. App identifiers and release configuration
   need owner confirmation. The six toolchain audit findings are unresolved (see checklist).
@@ -138,9 +139,9 @@ Gradle/Xcode output and device-local configuration are ignored and rebuilt, not 
 
 ## Production and store checklist / next phase
 
-- [ ] Approve and deploy the reviewed CORS changes before expecting native online features to work.
-      This branch cannot change the already-running production API. Recheck every endpoint and
-      error/preflight response against the live HTTPS origin after deployment, including email-code
+- [x] Approve and deploy reviewed CORS and native Google changes; verify native auth preflight,
+      health, nonce issuance and invalid-token rejection against the live HTTPS API.
+- [ ] Complete real-device checks for every online endpoint and error response, including email-code
       auth, cloud conflict/merge, leaderboard submit/replay, entitlement reads and offline recovery.
 - [ ] Run physical Android and iPhone/iPad QA: every game mode, daily archive, seeded challenges,
       undo, earned coins, themes, sound, haptics, settings, accessibility, 60 Hz performance, small
@@ -148,7 +149,7 @@ Gradle/Xcode output and device-local configuration are ignored and rebuilt, not 
 - [ ] Verify background/kill/relaunch and upgrades retain saves, identity, daily first attempts,
       unclaimed coin IDs and cloud merge baselines. Add versioned durable storage migration and
       secure credential handling without silently resetting any existing save.
-- [ ] Activate and device-test the implemented native Google OAuth; follow
+- [ ] Device-test the activated native Google OAuth; follow
       [the auth checklist](native-google-signin.md). Implement validated app/universal links;
       test cancellation, expired tokens, cold/warm callbacks, invalid links and account switching.
 - [ ] Test native sharing on physical Android/iOS, including cancellation and unavailable targets.
