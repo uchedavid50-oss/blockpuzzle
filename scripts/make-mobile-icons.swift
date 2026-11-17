@@ -36,8 +36,8 @@ for (density, size) in [("mdpi", 48), ("hdpi", 72), ("xhdpi", 96), ("xxhdpi", 14
     for name in ["ic_launcher", "ic_launcher_round"] {
         try icon(size, path: "android/app/src/main/res/mipmap-\(density)/\(name).png")
     }
-    // The existing mark stays inside Android's central 66dp adaptive-icon safe region.
-    try icon(size * 108 / 48, inset: 0.08,
+    // Keep every corner of the existing mark inside Android's 66dp circular safe region.
+    try icon(size * 108 / 48, inset: 0.20,
         path: "android/app/src/main/res/mipmap-\(density)/ic_launcher_foreground.png")
 }
 try icon(1024, path: "ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png")
