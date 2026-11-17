@@ -169,6 +169,8 @@ The browser release still uses `npm run build` → `dist/`. Native builds use
 `npm run build:native` → `dist-native/`, bundled inside the application for offline play.
 The native build disables AdSense, Paystack checkout, Google browser sign-in, PWA installation,
 and service workers. Ads and native purchases stay disabled pending verified integrations.
+Native Google sign-in uses the OS SDK and server-verified tokens when explicitly configured;
+see [native Google setup and activation](docs/native-google-signin.md).
 The existing Canvas game, game rules, scoring, modes and replay verification are shared unchanged.
 
 ```sh
@@ -211,7 +213,9 @@ Artifacts expire after 14 days. Re-run a workflow or push a new mobile-branch co
 them. A **Run workflow** button becomes available once this workflow exists on the default
 branch; until then use the automatic mobile-branch push runs and **Re-run all jobs**.
 Nothing in this workflow merges code, deploys the website, or uploads to either store.
-It requires no signing secrets. Actions are pinned to commit SHAs, with read-only repository permissions.
+Push/manual Android builds use the stable development key in GitHub Actions secrets. PR builds
+use temporary keys and receive no signing secrets. Actions are pinned to commit SHAs, with
+read-only repository permissions.
 
 **Android:** unzip the downloaded artifact, transfer `bunblocks-debug.apk` to your Android
 device and open it. Allow installation from the file/browser app when Android asks.
@@ -221,10 +225,11 @@ Alternatively, connect an emulator/device and run:
 adb install -r bunblocks-debug.apk
 ```
 
-This APK is signed with a development key, not a store release key. Each hosted runner can
-generate a different debug signing key, so an update from another run may require uninstalling
-the previous build. **Uninstalling removes local saves**: sync progress first if cloud saves
-are available, or keep the existing install until durable signing/backup is configured.
+This APK is signed with a development key, not a store release key. New push/manual builds use
+the same certificate; older builds and PR builds can have a different key and require a one-time
+uninstall. **Uninstalling removes local saves**: sync progress first if cloud saves are available,
+or keep the existing install until progress is backed up. See the signing and backup instructions
+in [native Google setup](docs/native-google-signin.md).
 Native online services still require the approved CORS deployment described in the migration report.
 Ads and purchases remain disabled.
 

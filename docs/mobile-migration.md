@@ -36,8 +36,9 @@ The pre-existing untracked `MOBILE.md`, `.DS_Store` and files in `video/` are no
   and continue through the existing handler and signature verification.
 - Google Identity Services browser sign-in is hidden in native because embedded WebViews are not
   a supported OAuth solution. Email-code sign-in and optional cloud saves use the central API client.
-  Native Google OAuth needs platform client IDs, OS auth flow, secure callback validation and
-  backend audience verification before enabling. Never load GSI inside the WebView.
+  Native Google OAuth now has its own SDK, callback and nonce-bound backend verification;
+  see [setup, test evidence and activation requirements](native-google-signin.md).
+  Never load GSI inside the WebView.
 - Local storage keys and formats are unchanged, so existing game save and merge behavior continues.
   Native WebView storage belongs to the installed app and is separate from browser storage.
   It persists across ordinary relaunches but uninstall/data clearing removes it; users must use
@@ -89,8 +90,9 @@ It runs the existing tests/validation and both web/native build checks before as
 debug APK on Ubuntu (JDK 21, Android SDK 36), then an unsigned arm64 simulator `.app` on macOS
 26/Xcode 26.4. Each artifact includes its source commit, run ID and SHA-256 checksum; retention
 is 14 days. The iOS app is tarred to preserve executable permissions and links when downloading.
-It is not an installable device IPA. No signing secrets, store publishing, production deployment,
-merge, native advertisements or purchase activation are part of the workflow.
+It is not an installable device IPA. Push/manual Android builds now use stable development
+signing secrets; PRs use temporary keys without those secrets. Store publishing, production
+deployment, merge, native advertisements and purchase activation are not part of the workflow.
 
 See the README's download section for artifact names, installation steps, debug signing-key
 limitations and the default-branch requirement for manual workflow dispatch. CI compiles native
@@ -125,7 +127,8 @@ this workflow and these subsequent documentation changes are additions to it.
   returns 405 without CORS. The new server support is local to this branch until approved deployment.
   Online native auth/cloud/leaderboard flows cannot be claimed as end-to-end verified against the
   running API yet. Offline gameplay works independently.
-- No native ad or purchase SDK is active. Google native auth, incoming app links, durable storage
+- No native ad or purchase SDK is active. Native Google implementation is complete but awaits
+  approved backend activation and real-account device QA. Incoming app links, durable storage
   migration, physical-device sharing and comprehensive device QA remain next-phase work.
 - Generated splash screens are placeholders; launcher icons now use the web logo. App identifiers and release configuration
   need owner confirmation. The six toolchain audit findings are unresolved (see checklist).
@@ -145,8 +148,9 @@ Gradle/Xcode output and device-local configuration are ignored and rebuilt, not 
 - [ ] Verify background/kill/relaunch and upgrades retain saves, identity, daily first attempts,
       unclaimed coin IDs and cloud merge baselines. Add versioned durable storage migration and
       secure credential handling without silently resetting any existing save.
-- [ ] Implement native Google OAuth and validated app/universal links as described above; test
-      cancellation, expired tokens, cold/warm callbacks, invalid links and account switching.
+- [ ] Activate and device-test the implemented native Google OAuth; follow
+      [the auth checklist](native-google-signin.md). Implement validated app/universal links;
+      test cancellation, expired tokens, cold/warm callbacks, invalid links and account switching.
 - [ ] Test native sharing on physical Android/iOS, including cancellation and unavailable targets.
 - [ ] Implement Apple StoreKit / Google Play Billing adapters only alongside server receipt/token
       verification, product mapping, idempotent grants, restore, refunds/revocations and notifications.

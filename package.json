@@ -11,13 +11,15 @@
     "validate": "vite-node scripts/validate.ts",
     "levels": "vite-node scripts/make-levels.ts",
     "dev:api": "vite-node scripts/dev-api.ts",
-    "build:native": "tsc --noEmit && vite build --mode native",
+    "build:native": "node scripts/configure-native-google.mjs && tsc --noEmit && vite build --mode native",
     "cap:sync": "npm run build:native && cap sync",
     "android:build": "npm run cap:sync && cd android && ./gradlew assembleDebug",
     "android:open": "cap open android",
     "ios:open": "cap open ios",
     "check:mobile": "node scripts/check-mobile-build.mjs",
-    "android:test": "cd android && ./gradlew :app:connectedDebugAndroidTest"
+    "android:test": "cd android && ./gradlew :app:connectedDebugAndroidTest",
+    "android:build:signed": "node scripts/android-signing.mjs build",
+    "android:signing": "node scripts/android-signing.mjs fingerprints"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.6.2",
@@ -34,6 +36,7 @@
     "@capacitor/core": "^8.6.2",
     "@capacitor/ios": "^8.6.2",
     "@capacitor/share": "^8.0.3",
+    "@capgo/capacitor-social-login": "^8.7.11",
     "@neondatabase/serverless": "^1.2.0"
   }
 }

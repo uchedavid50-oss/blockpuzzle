@@ -10,6 +10,9 @@ on:
 permissions:
   contents: read
 
+env:
+  VITE_GOOGLE_IOS_CLIENT_ID: ${{ vars.GOOGLE_IOS_CLIENT_ID }}
+
 concurrency:
   group: mobile-builds-${{ github.ref }}
   cancel-in-progress: true
@@ -64,18 +67,48 @@ jobs:
       - run: npm ci
       - run: npm run build:native
       - run: npx cap sync android
+      - name: Restore stable development signing key
+        if: github.event_name != 'pull_request'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
+        run: |
+          if [[ -z "$KEYSTORE_BASE64" || -z "$STORE_PASSWORD" || -z "$KEY_ALIAS" || -z "$KEY_PASSWORD" ]]; then
+            echo '::error::Stable Android signing secrets are missing; refusing an ephemeral signing key.'
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/bunblocks-ci.p12"
       - name: Build debug APK
         working-directory: android
+        env:
+          BUNBLOCKS_KEYSTORE_FILE: ${{ github.event_name != 'pull_request' && format('{0}/bunblocks-ci.p12', runner.temp) || '' }}
+          BUNBLOCKS_KEYSTORE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.ANDROID_SIGNING_STORE_PASSWORD || '' }}
+          BUNBLOCKS_KEY_ALIAS: ${{ github.event_name != 'pull_request' && secrets.ANDROID_SIGNING_KEY_ALIAS || '' }}
+          BUNBLOCKS_KEY_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.ANDROID_SIGNING_KEY_PASSWORD || '' }}
         run: ./gradlew --no-daemon :app:assembleDebug :app:testDebugUnitTest
       - name: Package APK and checksum
+        env:
+          EXPECTED_SIGNER: ${{ vars.ANDROID_SIGNING_CERT_SHA256 }}
         run: |
           mkdir -p artifacts/android
           cp android/app/build/outputs/apk/debug/app-debug.apk artifacts/android/bunblocks-debug.apk
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose artifacts/android/bunblocks-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs artifacts/android/bunblocks-debug.apk > artifacts/android/SIGNING-CERTIFICATE.txt
+          if [[ "$GITHUB_EVENT_NAME" != pull_request ]]; then
+            actual=$(awk '/^Signer #1 certificate SHA-256 digest:/ {print $NF}' artifacts/android/SIGNING-CERTIFICATE.txt)
+            expected=$(printf '%s' "$EXPECTED_SIGNER" | tr -d ':' | tr '[:upper:]' '[:lower:]')
+            if [[ -z "$expected" || "$actual" != "$expected" ]]; then
+              echo '::error::The APK certificate does not match the pinned stable CI identity.'
+              exit 1
+            fi
+          fi
           cd artifacts/android
           sha256sum bunblocks-debug.apk > SHA256SUMS.txt
-          printf 'Commit: %s\nRun: %s\n\nAndroid debug build for testing. Native ads and purchases are disabled.\nThe CI debug signing key can change between runs; see README before replacing an existing install.\n' \
-            "$GITHUB_SHA" "$GITHUB_RUN_ID" > BUILD-INFO.txt
+          printf 'Commit: %s\nRun: %s\nEvent: %s\n\nAndroid debug build for testing. Native ads and purchases are disabled.\nPush/manual builds use the stable CI certificate. PR builds use temporary signing and receive no signing secrets.\n' \
+            "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_EVENT_NAME" > BUILD-INFO.txt
       - name: Upload Android APK
         id: apk
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -90,6 +123,9 @@ jobs:
           ARTIFACT_URL: ${{ steps.apk.outputs.artifact-url }}
         run: |
           printf '### Android debug APK\n\n[Download APK artifact](%s), extract the ZIP and open `bunblocks-debug.apk` on Android.\n\nThis is a test build, not a Play Store release.\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove restored signing key
+        if: always() && github.event_name != 'pull_request'
+        run: rm -f "$RUNNER_TEMP/bunblocks-ci.p12"
 
   ios:
     name: iOS simulator app (Apple silicon)

@@ -1,3 +1,4 @@
+import { parseNativeGoogleConfig, type NativeGoogleConfig } from "./nativeGoogle";
 import { apiUrl, isNative } from "./platform";
 // The game's side of the leaderboard: a private player id, and calls to the /api routes. Everything
 // here fails soft: if the network or the server is unavailable, the game simply hides the feature.
@@ -43,7 +44,7 @@ export function savePlayerName(name: string): void {
 }
 
 /** True once /api/health says a leaderboard is configured. The UI shows leaderboard controls only then. */
-export const lb = { available: false, analytics: false, shop: false, currencies: ["NGN"] as string[], signin: { email: false, google: null as string | null } };
+export const lb = { available: false, analytics: false, shop: false, currencies: ["NGN"] as string[], signin: { email: false, google: null as string | null, googleNative: null as NativeGoogleConfig | null } };
 
 export async function call(path: string, init?: RequestInit): Promise<Response> {
   const ctl = new AbortController();
@@ -55,13 +56,14 @@ export async function call(path: string, init?: RequestInit): Promise<Response> 
 export async function checkLeaderboard(): Promise<void> {
   try {
     const r = await call("/api/health");
-    const d = r.ok ? ((await r.json()) as { leaderboard?: boolean; analytics?: boolean; shop?: boolean; currencies?: string[]; signin?: { email?: unknown; google?: unknown } }) : {};
+    const d = r.ok ? ((await r.json()) as { leaderboard?: boolean; analytics?: boolean; shop?: boolean; currencies?: string[]; signin?: { email?: unknown; google?: unknown; googleNative?: unknown } }) : {};
     lb.available = d.leaderboard === true;
     lb.analytics = d.analytics === true;
     lb.shop = !isNative() && d.shop === true;
     if (Array.isArray(d.currencies)) lb.currencies = d.currencies.filter((c) => typeof c === "string");
-    lb.signin = { email: d.signin?.email === true, google: !isNative() && typeof d.signin?.google === "string" ? d.signin.google : null };
-  } catch { lb.available = false; lb.analytics = false; lb.shop = false; }
+    lb.signin = { email: d.signin?.email === true, google: !isNative() && typeof d.signin?.google === "string" ? d.signin.google : null,
+      googleNative: isNative() ? parseNativeGoogleConfig(d.signin?.googleNative) : null };
+  } catch { lb.available = false; lb.analytics = false; lb.shop = false; lb.signin = { email: false, google: null, googleNative: null }; }
 }
 
 export type PostResult =

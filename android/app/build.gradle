@@ -1,5 +1,16 @@
 apply plugin: 'com.android.application'
 
+def ciSigning = [
+    file: System.getenv('BUNBLOCKS_KEYSTORE_FILE'),
+    password: System.getenv('BUNBLOCKS_KEYSTORE_PASSWORD'),
+    alias: System.getenv('BUNBLOCKS_KEY_ALIAS'),
+    keyPassword: System.getenv('BUNBLOCKS_KEY_PASSWORD')
+]
+def hasCiSigning = ciSigning.values().every { it != null && !it.isEmpty() }
+if (ciSigning.values().any { it != null && !it.isEmpty() } && !hasCiSigning) {
+    throw new GradleException('All four BUNBLOCKS signing environment variables are required.')
+}
+
 android {
     namespace = "app.bunblocks.game"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -16,7 +27,20 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (hasCiSigning) {
+            mobileCi {
+                storeFile file(ciSigning.file)
+                storePassword ciSigning.password
+                keyAlias ciSigning.alias
+                keyPassword ciSigning.keyPassword
+            }
+        }
+    }
     buildTypes {
+        debug {
+            if (hasCiSigning) signingConfig signingConfigs.mobileCi
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

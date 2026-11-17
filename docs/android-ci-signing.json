@@ -1,0 +1,7 @@
+{
+  "applicationId": "app.bunblocks.game",
+  "alias": "bunblocks-ci",
+  "sha1": "01:68:70:1B:3C:C8:3D:05:DC:26:6A:8E:FB:F0:6A:BE:69:F0:6A:ED",
+  "sha256": "9C:5F:CA:26:88:32:BB:27:49:39:DA:DE:32:26:EE:CE:E1:F8:0F:C7:3C:BF:85:72:72:2C:B5:CC:DE:68:CD:2E",
+  "purpose": "Stable CI development builds; not a store release key"
+}

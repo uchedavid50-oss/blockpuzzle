@@ -6,6 +6,9 @@ const config: CapacitorConfig = {
   webDir: "dist-native",
   server: { hostname: "localhost", androidScheme: "https", iosScheme: "capacitor", cleartext: false },
   android: { allowMixedContent: false },
-  plugins: { SystemBars: { insetsHandling: "native", initialViewportFitValueHint: "contain" } },
+  plugins: {
+    SystemBars: { insetsHandling: "native", initialViewportFitValueHint: "contain" },
+    SocialLogin: { providers: { google: true, apple: false, facebook: false, twitter: false }, logLevel: 0 },
+  },
 };
 export default config;

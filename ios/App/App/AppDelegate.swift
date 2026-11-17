@@ -1,5 +1,8 @@
 import UIKit
 import Capacitor
+#if canImport(GoogleSignIn)
+import GoogleSignIn
+#endif
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -33,6 +36,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // Called when the application is about to terminate. Save data if appropriate. See also applicationDidEnterBackground:.
     }
 
+    func application(_ app: UIApplication, open url: URL,
+                     options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        if GoogleSignInCallback.handle(url) { return true }
+        return ApplicationDelegateProxy.shared.application(app, open: url, options: options)
+    }
+
     func application(_ application: UIApplication,
                      configurationForConnecting connectingSceneSession: UISceneSession,
                      options: UIScene.ConnectionOptions) -> UISceneConfiguration {
@@ -40,5 +49,18 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                                           sessionRole: connectingSceneSession.role)
         config.delegateClass = SceneDelegate.self
         return config
+    }
+}
+
+// Only pass this build's registered Google callback scheme to the Google SDK.
+enum GoogleSignInCallback {
+    static func handle(_ url: URL) -> Bool {
+        #if canImport(GoogleSignIn)
+        guard let client = Bundle.main.object(forInfoDictionaryKey: "GIDClientID") as? String,
+              url.scheme == client.components(separatedBy: ".").reversed().joined(separator: ".") else { return false }
+        return GIDSignIn.sharedInstance.handle(url)
+        #else
+        return false
+        #endif
     }
 }

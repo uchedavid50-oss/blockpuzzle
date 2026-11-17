@@ -1,10 +1,11 @@
 import { isNative } from "./platform";
+import { nativeGoogleAvailable } from "./nativeGoogle";
 // The sign-in sheet. Unlike the rest of the game's screens it is HTML, not canvas: typing an email and a
 // code needs real inputs (the phone's keyboard, autofill of one-time codes), and Google's button must be
 // rendered by Google's own script. Styled to match the candy sheets drawn in gfx.ts.
 
 import { BRAND, COLORS, ROUND } from "./gfx.js";
-import { account, sendEmailCode, signInWithGoogle, signOut, signedIn, signinOffered, verifyEmailCode, type SigninResult } from "./cloudClient.js";
+import { account, sendEmailCode, signInWithGoogle, signInWithNativeGoogle, signOut, signedIn, signinOffered, verifyEmailCode, type SigninResult } from "./cloudClient.js";
 import { lb } from "./leaderboardClient.js";
 
 /** Why the sheet was opened, which sets its opening line. */
@@ -34,6 +35,9 @@ const CSS = `
 .bp-acct .msg{min-height:18px;font-size:13px;color:#c0264a;margin:0 0 8px}
 .bp-acct .ok{color:#178a5a}
 .bp-acct .google{display:flex;justify-content:center;min-height:44px;margin-bottom:4px}
+.bp-acct .native-google{background:#fff;padding:0;width:190px;max-width:100%;height:40px;margin:0 auto 12px;display:block;border-radius:4px}
+.bp-acct .native-google img{display:block;width:100%;height:100%;object-fit:contain}
+.bp-acct .native-google:disabled{opacity:.6;cursor:wait}
 .bp-acct .fine{font-size:11.5px;margin:8px 0 0}
 `;
 
@@ -120,6 +124,20 @@ function signInView(sheet: HTMLElement, why: Why, onDone?: () => void): void {
 
   const parts: Node[] = [el("h2", { textContent: why === "lost" ? "Sign in again" : "Save your progress" }), el("p", { textContent: INTRO[why] })];
 
+  const nativeGoogle = nativeGoogleAvailable(lb.signin.googleNative);
+  if (nativeGoogle) {
+    const button = el("button", { className: "native-google", type: "button" },
+      el("img", { src: "/google-signin-button.png", alt: "Sign in with Google" }));
+    button.onclick = async () => {
+      if (button.disabled) return;
+      button.disabled = true; msg.className = "msg ok"; msg.textContent = "Opening Google sign-in…";
+      const result = await signInWithNativeGoogle();
+      show(result, "Signed in. Loading your progress…");
+      if (result.ok) restart(); else button.disabled = false;
+    };
+    parts.push(button);
+  }
+
   if (!isNative() && lb.signin.google) {
     const box = el("div", { className: "google" });
     parts.push(box);
@@ -139,7 +157,7 @@ function signInView(sheet: HTMLElement, why: Why, onDone?: () => void): void {
   }
 
   if (lb.signin.email) {
-    if (!isNative() && lb.signin.google) parts.push(el("div", { className: "or", textContent: "or use your email" }));
+    if (nativeGoogle || (!isNative() && lb.signin.google)) parts.push(el("div", { className: "or", textContent: "or use your email" }));
     const email = el("input", { type: "email", placeholder: "you@example.com", autocomplete: "email", inputMode: "email", required: true });
     const code = el("input", { className: "code", placeholder: "••••••", autocomplete: "one-time-code", inputMode: "numeric", maxLength: 6 });
     code.hidden = true;

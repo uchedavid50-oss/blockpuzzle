@@ -9,7 +9,7 @@
 // Signing in on a device that has played as a guest moves that guest's purchases and coins into the
 // account (accounts.ts `mergeAccount`) and retires the guest id, the same way a restore does.
 
-import { createHmac, createPublicKey, timingSafeEqual, verify as rsaVerify } from "node:crypto";
+import { createHmac, createPublicKey, randomBytes, timingSafeEqual, verify as rsaVerify } from "node:crypto";
 import { cleanSnapshot } from "../cloudsave.js";
 import { currentId, isRetired, mergeAccount, movedKey, saveKey, signinKey } from "./accounts.js";
 import type { Reply } from "./handlers.js";
@@ -58,7 +58,10 @@ export class FakeMailer implements Mailer {
   }
 }
 
-export interface SigninConfig { secret: string; mailer: Mailer | null; googleClientId: string | null }
+export interface SigninConfig {
+  secret: string; mailer: Mailer | null; googleClientId: string | null;
+  googleNative?: { webClientId: string; androidClientIds: string[]; iosClientId: string | null };
+}
 
 /** The shortest AUTH_SECRET accepted: it keys the email hashes, so it must not be guessable. */
 export const MIN_AUTH_SECRET = 24;
@@ -75,7 +78,14 @@ export function signinFromEnv(env: Record<string, string | undefined> = process.
   if (key && from) mailer = new ResendMailer(key, from);
   else if (env.EMAIL_FAKE === "1" && !env.VERCEL) mailer = fakeMailer ??= new FakeMailer();
   const googleClientId = env.GOOGLE_CLIENT_ID || null;
-  return mailer || googleClientId ? { secret, mailer, googleClientId } : null;
+  const isClient = (v: string): boolean => /^\d+-[\w-]+\.apps\.googleusercontent\.com$/.test(v);
+  const androidClientIds = (env.GOOGLE_ANDROID_CLIENT_IDS ?? "").split(",").map(v => v.trim()).filter(isClient);
+  const ios = tidy(env.GOOGLE_IOS_CLIENT_ID);
+  const iosClientId = isClient(ios) ? ios : null;
+  const nativeWeb = tidy(env.GOOGLE_NATIVE_WEB_CLIENT_ID);
+  const googleNative = env.GOOGLE_NATIVE_ENABLED === "1" && isClient(nativeWeb) && (androidClientIds.length || iosClientId)
+    ? { webClientId: nativeWeb, androidClientIds, iosClientId } : undefined;
+  return mailer || googleClientId || googleNative ? { secret, mailer, googleClientId, ...(googleNative ? { googleNative } : {}) } : null;
 }
 
 // ---- Linking an identity to an account ---------------------------------------------------------
@@ -199,22 +209,31 @@ async function googleKeys(doFetch: typeof fetch, nowMs: number): Promise<Jwks> {
 const b64url = (s: string): Buffer => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
 
 /** Checks a Google ID token's signature and claims. Returns its account number and email, or null. */
-export async function verifyGoogleToken(token: unknown, clientId: string, now = new Date(), getKeys: (nowMs: number) => Promise<Jwks> = (ms) => googleKeys(fetch, ms)): Promise<{ sub: string; email: string | null } | null> {
+export async function verifyGoogleToken(token: unknown, clientId: string | readonly string[], now = new Date(),
+  getKeys: (nowMs: number) => Promise<Jwks> = (ms) => googleKeys(fetch, ms),
+  expected?: { nonce: string; authorizedParties: readonly string[] }): Promise<{ sub: string; email: string | null } | null> {
   if (typeof token !== "string" || token.length > 4096) return null;
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   try {
     const header = JSON.parse(b64url(parts[0]!).toString("utf8")) as { alg?: string; kid?: string };
-    const claims = JSON.parse(b64url(parts[1]!).toString("utf8")) as { iss?: string; aud?: string; exp?: number; sub?: string; email?: string; email_verified?: boolean };
-    if (header.alg !== "RS256") return null;
+    const claims = JSON.parse(b64url(parts[1]!).toString("utf8")) as { iss?: string; aud?: string; azp?: string; nonce?: string; exp?: number; sub?: string; email?: string; email_verified?: boolean };
+    if (header.alg !== "RS256" || typeof header.kid !== "string" || !header.kid) return null;
     const jwk = (await getKeys(now.getTime())).keys.find((k) => k.kid === header.kid);
     if (!jwk) return null;
     const ok = rsaVerify("RSA-SHA256", Buffer.from(`${parts[0]}.${parts[1]}`), createPublicKey({ key: jwk, format: "jwk" }), b64url(parts[2]!));
     if (!ok) return null;
     if (claims.iss !== "accounts.google.com" && claims.iss !== "https://accounts.google.com") return null;
-    if (claims.aud !== clientId || typeof claims.exp !== "number" || claims.exp * 1000 < now.getTime()) return null;
+    const audiences = typeof clientId === "string" ? [clientId] : clientId;
+    if (typeof claims.aud !== "string" || !audiences.includes(claims.aud) ||
+      typeof claims.exp !== "number" || !Number.isFinite(claims.exp) || claims.exp * 1000 <= now.getTime()) return null;
+    // Native tokens must match a server-issued nonce; they cannot bypass it through the web step.
+    if (expected) {
+      if (claims.nonce !== expected.nonce ||
+        (claims.azp !== undefined && !expected.authorizedParties.includes(claims.azp))) return null;
+    } else if (claims.nonce !== undefined) return null;
     if (typeof claims.sub !== "string" || !/^\d{1,40}$/.test(claims.sub)) return null;
-    return { sub: claims.sub, email: claims.email_verified && typeof claims.email === "string" ? claims.email.toLowerCase() : null };
+    return { sub: claims.sub, email: claims.email_verified === true && typeof claims.email === "string" ? claims.email.toLowerCase() : null };
   } catch { return null; }
 }
 
@@ -226,12 +245,53 @@ export async function signInGoogle(store: Store, cfg: SigninConfig, body: unknow
   return linkIdentity(store, `g:${g.sub}`, "google", g.email ? maskEmail(g.email) : "Google account", b.player, now);
 }
 
+const GOOGLE_NONCE_TTL = 300;
+const nativeNonceKey = (cfg: SigninConfig, nonce: string): string => `google:nonce:${hmac(cfg.secret, nonce)}`;
+
+/** Native SDK tokens are bound to this device's pending sign-in and consumed at most once. */
+export async function startNativeGoogle(store: Store, cfg: SigninConfig, body: unknown, now = new Date()): Promise<Reply> {
+  if (!cfg.googleNative) return reply(503, { error: "native google sign-in is not available" });
+  const b = body as { player?: unknown; platform?: unknown } | null;
+  const player = b?.player, platform = b?.platform;
+  if (!isPlayerId(player) || (platform !== "android" && platform !== "ios")) return reply(400, { error: "bad player or platform" });
+  if ((platform === "android" && !cfg.googleNative.androidClientIds.length) || (platform === "ios" && !cfg.googleNative.iosClientId))
+    return reply(503, { error: "native google sign-in is not configured for this platform" });
+  const nonce = randomBytes(32).toString("hex");
+  if (!(await store.setNx(nativeNonceKey(cfg, nonce), JSON.stringify({ player, platform, expires: now.getTime() + GOOGLE_NONCE_TTL * 1000 }), GOOGLE_NONCE_TTL)))
+    return reply(503, { error: "try again" });
+  return reply(200, { nonce });
+}
+
+export async function signInNativeGoogle(store: Store, cfg: SigninConfig, body: unknown, now = new Date(), getKeys?: (nowMs: number) => Promise<Jwks>): Promise<Reply> {
+  if (!cfg.googleNative) return reply(503, { error: "native google sign-in is not available" });
+  const b = (body ?? {}) as { credential?: unknown; nonce?: unknown; player?: unknown };
+  const invalid = (): Reply => reply(401, { error: "bad token", message: "Google sign-in expired or could not be verified. Please try again." });
+  if (!isPlayerId(b.player) || typeof b.nonce !== "string" || !/^[a-f0-9]{64}$/.test(b.nonce)) return invalid();
+  const key = nativeNonceKey(cfg, b.nonce);
+  const raw = await store.get(key);
+  if (!raw) return invalid();
+  let pending: { player?: unknown; platform?: unknown; expires?: unknown };
+  try { pending = JSON.parse(raw); } catch { return invalid(); }
+  if (pending.player !== b.player || typeof pending.expires !== "number" || pending.expires <= now.getTime()) return invalid();
+  const native = cfg.googleNative;
+  if (pending.platform !== "android" && pending.platform !== "ios") return invalid();
+  const clients = pending.platform === "android" ? [native.webClientId, ...native.androidClientIds]
+    : [native.webClientId, ...(native.iosClientId ? [native.iosClientId] : [])];
+  const audiences = pending.platform === "ios" && native.iosClientId ? [native.webClientId, native.iosClientId] : [native.webClientId];
+  const g = await verifyGoogleToken(b.credential, audiences, now, getKeys, { nonce: b.nonce, authorizedParties: clients });
+  if (!g || !(await store.setNx(`${key}:used`, "1", GOOGLE_NONCE_TTL))) return invalid();
+  await store.del(key);
+  return linkIdentity(store, `g:${g.sub}`, "google", g.email ? maskEmail(g.email) : "Google account", b.player, now);
+}
+
 /** One route for every sign-in step, so they share one rate limit. */
 export function signin(store: Store, cfg: SigninConfig, body: unknown, now = new Date()): Promise<Reply> {
   const step = (body as { step?: unknown } | null)?.step;
   if (step === "email-start") return startEmail(store, cfg, body, now);
   if (step === "email-verify") return verifyEmail(store, cfg, body, now);
   if (step === "google") return signInGoogle(store, cfg, body, now);
+  if (step === "google-native-start") return startNativeGoogle(store, cfg, body, now);
+  if (step === "google-native") return signInNativeGoogle(store, cfg, body, now);
   return Promise.resolve(reply(400, { error: "bad step" }));
 }
 

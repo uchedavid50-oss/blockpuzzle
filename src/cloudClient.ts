@@ -1,3 +1,5 @@
+import { Capacitor } from "@capacitor/core";
+import { nativeGoogleAvailable, nativeGoogleCredential } from "./nativeGoogle";
 // The game's side of sign-in and the cloud save. The merge rules are in cloudsave.ts (pure, tested);
 // this reads and writes localStorage and talks to /api/signin and /api/save. Like the rest of the
 // online features it fails soft: offline, the game plays on and syncs next time.
@@ -24,7 +26,7 @@ const setAccount = (a: Account | null): void => {
   try { if (a) localStorage.setItem(ACCOUNT_KEY, JSON.stringify(a)); else localStorage.removeItem(ACCOUNT_KEY); } catch { /* ignore */ }
 };
 export const signedIn = (): boolean => { const a = account(); return !!a && !a.needsSignIn; };
-export const signinOffered = (): boolean => lb.available && (lb.signin.email || !!lb.signin.google);
+export const signinOffered = (): boolean => lb.available && (lb.signin.email || !!lb.signin.google || nativeGoogleAvailable(lb.signin.googleNative));
 
 function readAll(): Snapshot {
   const out: Snapshot = {};
@@ -150,6 +152,27 @@ export async function signInWithGoogle(credential: string): Promise<SigninResult
     const { status, data } = await post("/api/signin", { step: "google", credential, player: getPlayer().id });
     return await finishSignIn(status, data);
   } catch { return { ok: false, message: "Could not connect. Check your internet and try again." }; }
+}
+
+let nativeSigninBusy = false;
+/** A fresh nonce and native Google ID token, then the same verified account/cloud merge as web. */
+export async function signInWithNativeGoogle(): Promise<SigninResult> {
+  const config = lb.signin.googleNative;
+  if (!config || !nativeGoogleAvailable(config)) return { ok: false, message: "Google sign-in is not configured for this build." };
+  if (nativeSigninBusy) return { ok: false, message: "Google sign-in is already open." };
+  nativeSigninBusy = true;
+  try {
+    const player = getPlayer().id;
+    const start = await post("/api/signin", { step: "google-native-start", player, platform: Capacitor.getPlatform() });
+    if (start.status !== 200 || typeof start.data.nonce !== "string" || !/^[a-f0-9]{64}$/.test(start.data.nonce))
+      return { ok: false, message: "Google sign-in is unavailable right now. Please try again later." };
+    const result = await nativeGoogleCredential(config, start.data.nonce);
+    if ("cancelled" in result) return { ok: false, message: "Sign-in cancelled." };
+    if ("error" in result) return { ok: false, message: result.error };
+    const { status, data } = await post("/api/signin", { step: "google-native", player, nonce: start.data.nonce, credential: result.credential });
+    return await finishSignIn(status, data);
+  } catch { return { ok: false, message: "Could not connect. Check your internet and try again." }; }
+  finally { nativeSigninBusy = false; }
 }
 
 /**

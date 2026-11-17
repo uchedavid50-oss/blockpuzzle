@@ -11,11 +11,13 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window?.rootViewController = CAPBridgeViewController()
         window?.makeKeyAndVisible()
 
-        SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)
+        let googleCallback = connectionOptions.urlContexts.contains { GoogleSignInCallback.handle($0.url) }
+        if !googleCallback { SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions) }
     }
 
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
-        SceneDelegateProxy.shared.scene(scene, openURLContexts: URLContexts)
+        let remaining = Set(URLContexts.filter { !GoogleSignInCallback.handle($0.url) })
+        if !remaining.isEmpty { SceneDelegateProxy.shared.scene(scene, openURLContexts: remaining) }
     }
 
     func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
