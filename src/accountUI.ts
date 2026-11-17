@@ -87,7 +87,16 @@ export function openAccount(why: Why = "settings", onDone?: () => void): void {
   const sheet = el("div", { className: "sheet" });
   dialog.append(sheet);
   dialog.addEventListener("cancel", () => { close(); onDone?.(); });
-  dialog.addEventListener("click", (e) => { if (e.target === dialog) { close(); onDone?.(); } });
+  // Settings opens on pointerup. Its following click can target this new modal;
+  // dismiss only a gesture that began on our backdrop, not the opening gesture.
+  let backdropPress = false;
+  dialog.addEventListener("pointerdown", (e) => { backdropPress = e.target === dialog; });
+  dialog.addEventListener("pointercancel", () => { backdropPress = false; });
+  dialog.addEventListener("click", (e) => {
+    const dismiss = backdropPress && e.target === dialog;
+    backdropPress = false;
+    if (dismiss) { close(); onDone?.(); }
+  });
   document.body.append(dialog);
   if (signedIn()) accountView(sheet, onDone); else signInView(sheet, why, onDone);
   dialog.showModal();
