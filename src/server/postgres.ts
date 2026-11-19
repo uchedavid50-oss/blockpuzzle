@@ -6,6 +6,7 @@
 
 import { createHash } from "node:crypto";
 import { neon } from "@neondatabase/serverless";
+import type { NativePayment } from "./nativePayments.js";
 import type { Store } from "./store.js";
 
 export type Query = (text: string, params?: unknown[]) => Promise<Record<string, unknown>[]>;
@@ -29,6 +30,38 @@ export class PostgresStore implements Store {
     this.ready ??= (async () => { for (const s of SCHEMA) await this.q(s); })().catch((e) => { this.ready = null; throw e; });
     await this.ready;
     return this.q(text, params);
+  }
+
+  async applyNativePayment(key: string, balance: string, payment: NativePayment, coins: number): Promise<void> {
+    await this.run(`
+      WITH changed AS (
+        INSERT INTO bp_kv (key, value)
+        VALUES ($1, jsonb_set($2::jsonb, '{delta}', to_jsonb(
+          CASE WHEN ($2::jsonb->>'active')::boolean THEN $4::bigint ELSE 0 END
+        ))::text)
+        ON CONFLICT (key) DO UPDATE SET value = jsonb_set(EXCLUDED.value::jsonb, '{delta}', to_jsonb(
+          (EXCLUDED.value::jsonb->>'delta')::bigint
+          - CASE WHEN (bp_kv.value::jsonb->>'active')::boolean THEN $4::bigint ELSE 0 END
+        ))::text
+        WHERE bp_kv.value::jsonb->>'player' = EXCLUDED.value::jsonb->>'player'
+          AND bp_kv.value::jsonb->>'sku' = EXCLUDED.value::jsonb->>'sku'
+          AND ((bp_kv.value::jsonb->>'active')::boolean OR NOT (EXCLUDED.value::jsonb->>'active')::boolean
+            OR (EXCLUDED.value::jsonb->>'reversal')::boolean)
+          AND (bp_kv.value::jsonb->>'version')::bigint < (EXCLUDED.value::jsonb->>'version')::bigint
+        RETURNING (value::jsonb->>'delta')::bigint AS delta
+      )
+      INSERT INTO bp_counter (key, n) SELECT $3, delta FROM changed WHERE delta <> 0
+      ON CONFLICT (key) DO UPDATE SET n = bp_counter.n + EXCLUDED.n
+    `, [key, JSON.stringify(payment), balance, coins]);
+  }
+
+  async moveCoinBalance(from: string, to: string): Promise<void> {
+    if (from === to) return;
+    await this.run(`
+      WITH moved AS (DELETE FROM bp_counter WHERE key = $1 RETURNING n)
+      INSERT INTO bp_counter (key, n) SELECT $2, n FROM moved WHERE n <> 0
+      ON CONFLICT (key) DO UPDATE SET n = bp_counter.n + EXCLUDED.n
+    `, [from, to]);
   }
 
   async setNx(key: string, value: string, ttlSeconds: number): Promise<boolean> {

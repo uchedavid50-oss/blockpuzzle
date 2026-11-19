@@ -1,3 +1,4 @@
+import type { NativePayment } from "./nativePayments.js";
 // Redis over HTTP (the Upstash REST API, which Vercel's Redis integration provides). Each command is
 // a JSON array posted to the REST URL, so no client library is needed.
 
@@ -19,6 +20,30 @@ export class RedisStore implements Store {
     const data = (await res.json()) as { result?: unknown; error?: string };
     if (data.error) throw new Error(`redis ${args[0]}: ${data.error}`);
     return data.result ?? null;
+  }
+
+  async applyNativePayment(key: string, balance: string, payment: NativePayment, coins: number): Promise<void> {
+    await this.cmd("EVAL", `
+      local next = cjson.decode(ARGV[1])
+      local raw = redis.call("GET", KEYS[1])
+      local old = raw and cjson.decode(raw) or nil
+      if old and (old.player ~= next.player or old.sku ~= next.sku or old.version >= next.version
+          or (not old.active and next.active and not next.reversal)) then return end
+      local delta = ((next.active and 1 or 0) - (old and old.active and 1 or 0)) * tonumber(ARGV[2])
+      if delta ~= 0 then redis.call("INCRBY", KEYS[2], delta) end
+      redis.call("SET", KEYS[1], ARGV[1])
+    `, 2, key, balance, JSON.stringify(payment), coins);
+  }
+
+  async moveCoinBalance(from: string, to: string): Promise<void> {
+    if (from === to) return;
+    await this.cmd("EVAL", `
+      local amount = redis.call("GET", KEYS[1])
+      if amount and amount ~= "0" then
+        redis.call("INCRBY", KEYS[2], amount)
+        redis.call("DEL", KEYS[1])
+      end
+    `, 2, from, to);
   }
 
   async setNx(key: string, value: string, ttlSeconds: number): Promise<boolean> {

@@ -1,3 +1,4 @@
+import { loadNativeProducts } from "./purchases";
 import { CanvasLayer } from "./renderCache";
 import { isNative, publicOrigin } from "./platform";
 import { startNativeLifecycle, shareNative } from "./native";
@@ -644,7 +645,11 @@ async function postMyScore(cup = false): Promise<void> {
 
 // Coins need no network: pay today's bonus now, and again if the game is left open past midnight.
 payStartupCoins();
-document.addEventListener("visibilitychange", () => { if (!document.hidden) payStartupCoins(); });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  payStartupCoins();
+  if (lb.available && isNative()) void syncEntitlements();
+});
 
 /** On the cup's last day, once, to someone who has not posted: a nudge toward the coins. */
 function remindCup(): void {
@@ -688,7 +693,8 @@ void checkLeaderboard().then(async () => {
   applyConsent(); // analytics only ever start after the player has said yes
   if (getConsent() === "yes") track("session_start");
   if (lb.available) { void collectCupPrize(); remindCup(); }
-  if (lb.shop) {
+  if (lb.nativeShopKey) void loadNativeProducts();
+  if (lb.available || lb.shop) {
     const back = await handleReturn(location.search);
     const arrived = await syncEntitlements(); // also collects any coins bought with money
     // A coin pack is announced by its coins arriving; anything else by the usual thank-you.

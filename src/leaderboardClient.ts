@@ -1,3 +1,4 @@
+import { Capacitor } from "@capacitor/core";
 import { parseNativeGoogleConfig, type NativeGoogleConfig } from "./nativeGoogle";
 import { apiUrl, isNative } from "./platform";
 // The game's side of the leaderboard: a private player id, and calls to the /api routes. Everything
@@ -44,7 +45,7 @@ export function savePlayerName(name: string): void {
 }
 
 /** True once /api/health says a leaderboard is configured. The UI shows leaderboard controls only then. */
-export const lb = { available: false, analytics: false, shop: false, currencies: ["NGN"] as string[], signin: { email: false, google: null as string | null, googleNative: null as NativeGoogleConfig | null } };
+export const lb = { available: false, analytics: false, shop: false, nativeShopKey: null as string | null, currencies: ["NGN"] as string[], signin: { email: false, google: null as string | null, googleNative: null as NativeGoogleConfig | null } };
 
 export async function call(path: string, init?: RequestInit): Promise<Response> {
   const ctl = new AbortController();
@@ -56,14 +57,17 @@ export async function call(path: string, init?: RequestInit): Promise<Response> 
 export async function checkLeaderboard(): Promise<void> {
   try {
     const r = await call("/api/health");
-    const d = r.ok ? ((await r.json()) as { leaderboard?: boolean; analytics?: boolean; shop?: boolean; currencies?: string[]; signin?: { email?: unknown; google?: unknown; googleNative?: unknown } }) : {};
+    const d = r.ok ? ((await r.json()) as { leaderboard?: boolean; analytics?: boolean; shop?: boolean; nativeShop?: Record<string, unknown>; currencies?: string[]; signin?: { email?: unknown; google?: unknown; googleNative?: unknown } }) : {};
     lb.available = d.leaderboard === true;
     lb.analytics = d.analytics === true;
-    lb.shop = !isNative() && d.shop === true;
+    const platform = Capacitor.getPlatform();
+    const nativeKey = Capacitor.isNativePlatform() ? d.nativeShop?.[platform] : null;
+    lb.nativeShopKey = typeof nativeKey === "string" ? nativeKey : null;
+    lb.shop = isNative() ? lb.nativeShopKey !== null : d.shop === true;
     if (Array.isArray(d.currencies)) lb.currencies = d.currencies.filter((c) => typeof c === "string");
     lb.signin = { email: d.signin?.email === true, google: !isNative() && typeof d.signin?.google === "string" ? d.signin.google : null,
       googleNative: isNative() ? parseNativeGoogleConfig(d.signin?.googleNative) : null };
-  } catch { lb.available = false; lb.analytics = false; lb.shop = false; lb.signin = { email: false, google: null, googleNative: null }; }
+  } catch { lb.available = false; lb.analytics = false; lb.shop = false; lb.nativeShopKey = null; lb.signin = { email: false, google: null, googleNative: null }; }
 }
 
 export type PostResult =

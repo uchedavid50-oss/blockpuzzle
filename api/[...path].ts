@@ -10,6 +10,8 @@ import * as collect from "../routes/collect.js";
 import * as cup from "../routes/cup.js";
 import * as entitlements from "../routes/entitlements.js";
 import * as health from "../routes/health.js";
+import * as nativeShop from "../routes/native-shop.js";
+import * as revenueCatWebhook from "../routes/revenuecat-webhook.js";
 import * as payments from "../routes/payments.js";
 import * as paystackWebhook from "../routes/paystack-webhook.js";
 import * as purchase from "../routes/purchase.js";
@@ -34,6 +36,8 @@ const routes: Record<string, { GET?: Handler; POST?: Handler }> = {
   "payments": payments,
   "paystack-webhook": paystackWebhook,
   "purchase": purchase,
+  "native-shop": nativeShop,
+  "revenuecat-webhook": revenueCatWebhook,
   "rename": rename,
   "save": save,
   "signin": signin,

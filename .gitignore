@@ -24,3 +24,6 @@ ios/App/App/capacitor.config.json
 .mobile-signing/
 *.jks
 *.keystore
+
+# RevenueCat setup template contains placeholders only.
+!.env.revenuecat.example

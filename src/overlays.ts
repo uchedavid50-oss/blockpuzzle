@@ -1,3 +1,4 @@
+import { loadNativeProducts, nativePrice, webCheckoutAllowed } from "./purchases";
 // The screens drawn over the game: praise banners, toasts, stats, the modes sheet, the challenge
 // invitation and the first-run hint. Rendering only. Their open/closed state lives in `ui`, which the
 // input handlers in main.ts read and write.
@@ -13,7 +14,7 @@ import { setSetting, settings } from "./settings";
 import { haptics } from "./haptics";
 import { forSale, formatPrice } from "./entitlements";
 import { ownership } from "./ownership";
-import { beginCheckout, restoreFromCode, syncEntitlements, transferCode } from "./shopClient";
+import { beginCheckout, restoreNativePurchases, restoreFromCode, syncEntitlements, transferCode } from "./shopClient";
 import { openAccount } from "./accountUI";
 import { account, signedIn, signinOffered } from "./cloudClient";
 import { adChoicesAvailable, showAdChoices } from "./adLoader";
@@ -689,7 +690,7 @@ function drawAccountRow(cw: number): void {
 function checkout(sku: Parameters<typeof beginCheckout>[0], note: (s: string) => void): void {
   const go = (): void => {
     ui.shopBusy = true; note("Opening checkout…");
-    void beginCheckout(sku, currency()).then((r) => { ui.shopBusy = false; note(r.ok ? "Opening checkout…" : r.message); });
+    void beginCheckout(sku, currency()).then((r) => { ui.shopBusy = false; note(r.ok ? (webCheckoutAllowed() ? "Opening checkout…" : "Purchase submitted. Waiting for confirmation.") : r.message); });
   };
   if (signinOffered() && !signedIn()) openAccount("purchase", go); else go();
 }
@@ -829,6 +830,8 @@ export function openCoinShop(): void {
 
 /** Coin packs for money appear only when this deployment can take payments. */
 const coinPacksShown = (): boolean => lb.shop;
+const shopPrice = (sku: string, price: Parameters<typeof formatPrice>[0]): string =>
+  webCheckoutAllowed() ? formatPrice(price, currency()) : nativePrice(sku) ?? "Unavailable";
 
 function drawCoinShop(cw: number): void {
   ctx.textBaseline = "middle";
@@ -895,7 +898,7 @@ function drawCoinShop(cw: number): void {
       ctx.fillStyle = COLORS.dim;
       ctx.font = `500 11px ${ROUND}`;
       ctx.fillText("Added once your payment clears.", left + 42, y + 40, cw - 170);
-      candyButton(cw / 2 - 66, y + 29, 92, 36, formatPrice(p.price, currency()), "pink", 0, 14);
+      candyButton(cw / 2 - 66, y + 29, 92, 36, shopPrice(p.id, p.price), "pink", 0, 14);
     });
   }
 
@@ -987,13 +990,19 @@ function drawShop(cw: number): void {
     ctx.fillStyle = COLORS.dim;
     ctx.font = `500 11.5px ${ROUND}`;
     ctx.fillText(it.blurb, -cw / 2 + 28, y + 44, cw - 150);
-    candyButton(cw / 2 - 66, y + 33, 92, 36, formatPrice(it.price, currency()), "gold", 0, 14);
+    candyButton(cw / 2 - 66, y + 33, 92, 36, shopPrice(it.sku, it.price), "gold", 0, 14);
   });
   ctx.textAlign = "center";
   ctx.fillStyle = COLORS.dim;
   ctx.font = `500 11.5px ${ROUND}`;
   ctx.fillText(ui.shopNote || "Cosmetic only. Nothing here changes how the game plays.", 0, 190, cw - 40);
+  if (!webCheckoutAllowed()) {
+    ctx.fillStyle = BRAND.violet;
+    ctx.font = `700 12px ${ROUND}`;
+    ctx.fillText("Restore store purchases", 0, 160, cw - 40);
+  }
   ctx.font = `600 11px ${ROUND}`;
+  ctx.fillStyle = COLORS.dim;
   ctx.fillText("Restore code (moves everything to a new device; tap to copy):", 0, 216, cw - 30);
   ctx.fillText(transferCode(), 0, 234, cw - 20);
   ctx.fillStyle = BRAND.violet;
@@ -1018,6 +1027,7 @@ export function settingsTap(lx: number, ly: number): boolean {
         ui.settingsPage = b.page;
         ui.coinNote = "";
         if (b.page === "shop") { track("shop_viewed"); void syncEntitlements(); }
+        if (lb.nativeShopKey && (b.page === "shop" || b.page === "coins")) void loadNativeProducts();
         haptics.tick();
       }
       return false;
@@ -1064,6 +1074,16 @@ export function settingsTap(lx: number, ly: number): boolean {
         checkout(items[i]!.sku, (n) => { ui.shopNote = n; });
         return false;
       }
+    }
+    if (!webCheckoutAllowed() && ly >= 146 && ly <= 174 && Math.abs(lx) <= 110) {
+      if (!ui.shopBusy) {
+        ui.shopBusy = true;
+        void restoreNativePurchases().then((r) => {
+          ui.shopBusy = false;
+          ui.shopNote = r.ok ? "Restore requested. Checking your purchases…" : r.message;
+        });
+      }
+      return false;
     }
     if (ly >= 204 && ly <= 244) { void navigator.clipboard?.writeText(transferCode()).then(() => { ui.shopNote = "Code copied."; }, () => {}); return false; }
     if (ly >= 248 && ly <= 270) {

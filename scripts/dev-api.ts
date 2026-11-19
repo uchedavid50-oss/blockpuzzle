@@ -22,6 +22,8 @@ import * as webhook from "../routes/paystack-webhook";
 import * as coinsApi from "../routes/coins";
 import * as startApi from "../routes/start";
 import * as transferApi from "../routes/transfer";
+import * as nativeShop from "../routes/native-shop";
+import * as revenueCatWebhook from "../routes/revenuecat-webhook";
 import * as paymentsApi from "../routes/payments";
 import * as signinApi from "../routes/signin";
 import * as saveApi from "../routes/save";
@@ -48,7 +50,7 @@ const store: Store = usePg ? postgresStore(process.env.DATABASE_URL!) : new Memo
 (globalThis as { __blockpuzzleStore?: Store }).__blockpuzzleStore = store;
 
 type Route = { GET?: (r: Request) => Response | Promise<Response>; POST?: (r: Request) => Response | Promise<Response> };
-const routes: Record<string, Route> = { "/api/health": health, "/api/cup": cup, "/api/submit": submit, "/api/rename": rename, "/api/board": board, "/api/streaks": streaks, "/api/collect": collectApi, "/api/stats": statsApi, "/api/checkout": checkout, "/api/purchase": purchase, "/api/entitlements": entitlements, "/api/paystack-webhook": webhook, "/api/coins": coinsApi, "/api/start": startApi, "/api/transfer": transferApi, "/api/payments": paymentsApi, "/api/signin": signinApi, "/api/save": saveApi };
+const routes: Record<string, Route> = { "/api/health": health, "/api/cup": cup, "/api/submit": submit, "/api/rename": rename, "/api/board": board, "/api/streaks": streaks, "/api/collect": collectApi, "/api/stats": statsApi, "/api/checkout": checkout, "/api/purchase": purchase, "/api/entitlements": entitlements, "/api/paystack-webhook": webhook, "/api/coins": coinsApi, "/api/start": startApi, "/api/transfer": transferApi, "/api/payments": paymentsApi, "/api/native-shop": nativeShop, "/api/revenuecat-webhook": revenueCatWebhook, "/api/signin": signinApi, "/api/save": saveApi };
 
 // A few fake players with real, verified games, so the board has something on it.
 const today = new Date().toISOString().slice(0, 10);

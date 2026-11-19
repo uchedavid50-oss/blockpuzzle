@@ -1,6 +1,7 @@
 // The leaderboard's request handling, independent of any web framework: each function takes a store
 // and plain data and returns a status and a JSON body. The api/ routes are thin wrappers around these.
 
+import { nativeOwned } from "./accounts.js";
 import { applyPlay, currentStreak, type StreakRec } from "../streak.js";
 import { RULES_VERSION, replay, type MoveTuple } from "../verify.js";
 import { claimName, isRetired } from "./accounts.js";
@@ -103,7 +104,10 @@ export async function getBoard(store: Store, query: { date?: unknown; player?: u
   const key = boardKey(date);
   const top = await store.zrevrange(key, 0, BOARD_SIZE - 1);
   const names = await store.hmget("names", top.map((e) => e.member));
-  const supporters = await store.hmget("supporters", top.map((e) => e.member));
+  const players = top.map((entry) => entry.member);
+  const badges = await store.hmget("supporters", players);
+  const supporters = await Promise.all(players.map(async (player, i) =>
+    badges[i] != null || (await nativeOwned(store, player)).includes("supporter_bundle")));
   const me = isPlayerId(query.player) ? query.player : null;
   let mine: { rank: number; score: number } | null = null;
   if (me) {
@@ -112,7 +116,7 @@ export async function getBoard(store: Store, query: { date?: unknown; player?: u
   }
   return reply(200, {
     date, total: await store.zcard(key), me: mine,
-    top: top.map((e, i) => ({ rank: i + 1, name: names[i] ?? "Player", score: e.score, you: e.member === me, supporter: supporters[i] !== null })),
+    top: top.map((e, i) => ({ rank: i + 1, name: names[i] ?? "Player", score: e.score, you: e.member === me, supporter: supporters[i] === true })),
   });
 }
 
@@ -147,11 +151,14 @@ export async function getStreaks(store: Store, query: { player?: unknown }, now 
   const live = await liveStreaks(store, utcToday(now));
   const top = live.slice(0, BOARD_SIZE);
   const names = await store.hmget("names", top.map((e) => e.member));
-  const supporters = await store.hmget("supporters", top.map((e) => e.member));
+  const players = top.map((entry) => entry.member);
+  const badges = await store.hmget("supporters", players);
+  const supporters = await Promise.all(players.map(async (player, i) =>
+    badges[i] != null || (await nativeOwned(store, player)).includes("supporter_bundle")));
   const me = isPlayerId(query.player) ? query.player : null;
   const mineIdx = me ? live.findIndex((e) => e.member === me) : -1;
   return reply(200, {
-    top: top.map((e, i) => ({ rank: i + 1, name: names[i] ?? "Player", streak: e.streak, best: e.best, you: e.member === me, supporter: supporters[i] !== null })),
+    top: top.map((e, i) => ({ rank: i + 1, name: names[i] ?? "Player", streak: e.streak, best: e.best, you: e.member === me, supporter: supporters[i] === true })),
     me: mineIdx >= 0 ? { rank: mineIdx + 1, streak: live[mineIdx]!.streak } : null,
   });
 }

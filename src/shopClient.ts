@@ -22,10 +22,11 @@ async function postJson(path: string, body: unknown): Promise<{ status: number; 
  * has collected yet, collect them now. Returns the coins collected (0 almost always).
  */
 export async function syncEntitlements(): Promise<number> {
-  if (!lb.shop) return 0;
+  if (!lb.shop && !lb.available) return 0;
   try {
-    const { status, data: d } = await postJson("/api/entitlements", { player: getPlayer().id });
-    if (status !== 200) return 0;
+    const player = getPlayer().id;
+    const { status, data: d } = await postJson("/api/entitlements", { player });
+    if (status !== 200 || player !== getPlayer().id) return 0;
     if (d.moved === true) {
       // This device's code was used to move the account to another device: it owns nothing now.
       setOwned([]);
@@ -79,7 +80,11 @@ export async function claimCoins(): Promise<number> {
 
 /** Send the player to Paystack's checkout page for one item or coin pack. */
 export async function beginCheckout(sku: Sku | PackId, currency = "NGN"): Promise<Outcome> {
-  if (!webCheckoutAllowed()) return nativePurchases.purchase(sku);
+  if (!webCheckoutAllowed()) {
+    const result = await nativePurchases.purchase(sku);
+    if (result.ok || result.pending) void syncAfterStore();
+    return result;
+  }
   if (!isSku(sku) && !isPack(sku)) return { ok: false, message: "That item is not for sale." };
   try {
     const { status, data } = await postJson("/api/checkout", { player: getPlayer().id, sku, currency });
@@ -131,4 +136,22 @@ export async function restoreFromCode(code: string): Promise<Outcome> {
     }
     return { ok: false, message: typeof data.message === "string" ? data.message : "Could not restore right now. Try again later." };
   } catch { return { ok: false, message: "Could not reach the shop. Check your connection." }; }
+}
+
+let storeRefresh: Promise<void> | undefined;
+function syncAfterStore(): Promise<void> {
+  storeRefresh ??= (async () => {
+    // Webhooks can arrive after the store sheet dismisses. Refresh again while the player is here.
+    for (const delay of [0, 3_000, 10_000, 20_000]) {
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      await syncEntitlements();
+    }
+  })().finally(() => { storeRefresh = undefined; });
+  return storeRefresh;
+}
+
+export async function restoreNativePurchases(): Promise<Outcome> {
+  const result = await nativePurchases.restore();
+  if (result.ok) void syncAfterStore();
+  return result;
 }

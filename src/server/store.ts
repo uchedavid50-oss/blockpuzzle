@@ -1,7 +1,11 @@
+import type { NativePayment } from "./nativePayments.js";
+
 // The storage the leaderboard needs, as a small interface. Production uses Redis over HTTP (redis.ts);
 // tests and local development use the in-memory version below.
 
 export interface Store {
+  moveCoinBalance(from: string, to: string): Promise<void>;
+  applyNativePayment(key: string, balance: string, payment: NativePayment, coins: number): Promise<void>;
   /** Sets the key only if it does not exist yet. Returns true if it was set. */
   setNx(key: string, value: string, ttlSeconds: number): Promise<boolean>;
   get(key: string): Promise<string | null>;
@@ -33,6 +37,20 @@ export interface Store {
 }
 
 export class MemoryStore implements Store {
+  async applyNativePayment(key: string, balance: string, payment: NativePayment, coins: number): Promise<void> {
+    const raw = this.kv.get(key);
+    const old = raw ? JSON.parse(raw) as NativePayment : null;
+    if (old && (old.player !== payment.player || old.sku !== payment.sku || old.version >= payment.version || (!old.active && payment.active && !payment.reversal))) return;
+    const delta = (Number(payment.active) - Number(old?.active ?? false)) * coins;
+    if (delta) this.counters.set(balance, (this.counters.get(balance) ?? 0) + delta);
+    this.kv.set(key, JSON.stringify(payment));
+  }
+  async moveCoinBalance(from: string, to: string): Promise<void> {
+    const amount = this.counters.get(from) ?? 0;
+    if (!amount || from === to) return;
+    this.counters.delete(from);
+    this.counters.set(to, (this.counters.get(to) ?? 0) + amount);
+  }
   private kv = new Map<string, string>();
   private z = new Map<string, Map<string, number>>();
   private h = new Map<string, Map<string, string>>();

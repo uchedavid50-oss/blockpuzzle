@@ -9,8 +9,10 @@ export const publicOrigin = (): string => isNative() ? PRODUCTION_ORIGIN : locat
 /** Native builds may only call this application's HTTPS API. Web keeps its same-origin proxy. */
 export function apiUrl(path: string): string {
   if (!isNative()) return path;
-  const url = new URL(path, PRODUCTION_API_ORIGIN);
-  if (url.origin !== PRODUCTION_API_ORIGIN || !url.pathname.startsWith("/api/"))
+  const origin = new URL(import.meta.env.VITE_NATIVE_API_ORIGIN || PRODUCTION_API_ORIGIN);
+  if (origin.protocol !== "https:" || origin.href !== `${origin.origin}/`) throw new Error("Invalid native API origin");
+  const url = new URL(path, origin);
+  if (url.origin !== origin.origin || !url.pathname.startsWith("/api/"))
     throw new Error("Untrusted native API URL");
   return url.href;
 }

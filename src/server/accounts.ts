@@ -5,8 +5,9 @@
 // restore is a transfer: the account moves to a brand-new id on the new device, and the old id is
 // retired. Whoever restores last has it; nobody else does.
 
-import { NOTHING, parse, type Entitlements } from "../entitlements.js";
+import { NOTHING, isSku, parse, type Entitlements } from "../entitlements.js";
 import type { Reply } from "./handlers.js";
+import { nativeRefs, type NativePayment } from "./nativePayments.js";
 import { movePayments } from "./payments.js";
 import { isPlayerId, nameKey, utcToday } from "./rules.js";
 import type { Store } from "./store.js";
@@ -42,10 +43,24 @@ export async function currentId(store: Store, player: string): Promise<string> {
  * What a player owns. Kept as a set (one atomic add per item, so two purchases confirmed at the same
  * moment cannot overwrite each other), merged with the older JSON record from before the change.
  */
-export async function entitlementsOf(store: Store, player: string): Promise<Entitlements> {
+async function webEntitlements(store: Store, player: string): Promise<Entitlements> {
   let legacy: Entitlements = NOTHING;
   try { legacy = parse(JSON.parse((await store.get(`ent:${player}`)) ?? "null")); } catch { /* ignore */ }
   return parse({ owned: [...legacy.owned, ...(await store.smembers(entSetKey(player)))] });
+}
+
+export async function entitlementsOf(store: Store, player: string): Promise<Entitlements> {
+  return parse({ owned: [...(await webEntitlements(store, player)).owned, ...(await nativeOwned(store, player))] });
+}
+
+export async function nativeOwned(store: Store, player: string): Promise<string[]> {
+  const refs = await store.smembers(nativeRefs(player));
+  const records = await Promise.all(refs.map(async (key) => JSON.parse((await store.get(key)) ?? "null") as NativePayment | null));
+  const owned: string[] = [];
+  for (const record of records) {
+    if (record?.active && isSku(record.sku) && await currentId(store, record.player) === player) owned.push(record.sku);
+  }
+  return owned;
 }
 
 /**
@@ -78,9 +93,9 @@ const randomId = (): string => {
  * guest (into the account). Does not retire `from`: callers claim that first.
  */
 export async function mergeAccount(store: Store, from: string, to: string, now = new Date()): Promise<void> {
-  for (const sku of (await entitlementsOf(store, from)).owned) await store.sadd(entSetKey(to), sku);
-  const [coins] = await store.mcount([`coins:${from}`]);
-  if (coins) { await store.incr(`coins:${from}`, -coins); await store.incr(`coins:${to}`, coins); }
+  for (const sku of (await webEntitlements(store, from)).owned) await store.sadd(entSetKey(to), sku);
+  for (const ref of await store.smembers(nativeRefs(from))) await store.sadd(nativeRefs(to), ref);
+  await store.moveCoinBalance(`coins:${from}`, `coins:${to}`);
 
   const [name, supporter] = [(await store.hmget("names", [from]))[0], (await store.hmget("supporters", [from]))[0]];
   if (name && !(await store.hmget("names", [to]))[0]) {

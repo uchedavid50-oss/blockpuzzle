@@ -131,7 +131,7 @@ export async function revokePurchase(store: Store, reference: unknown, kind: "re
       if (legacy && Array.isArray(legacy.owned) && legacy.owned.includes(sku))
         await store.set(`ent:${player}`, JSON.stringify({ owned: legacy.owned.filter((s) => s !== sku) }));
     } catch { /* nothing to fix */ }
-    if (!owns(await entitlementsOf(store, player), "supporter_bundle" as Sku)) await store.hdel("supporters", player);
+    if (sku === "supporter_bundle") await store.hdel("supporters", player);
   }
   return reply(200, { ok: true, revoked: true });
 }

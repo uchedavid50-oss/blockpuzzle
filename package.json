@@ -37,6 +37,7 @@
     "@capacitor/ios": "^8.6.2",
     "@capacitor/share": "^8.0.3",
     "@capgo/capacitor-social-login": "^8.7.11",
-    "@neondatabase/serverless": "^1.2.0"
+    "@neondatabase/serverless": "^1.2.0",
+    "@revenuecat/purchases-capacitor": "^14.1.2"
   }
 }

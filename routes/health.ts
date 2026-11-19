@@ -1,3 +1,4 @@
+import { nativeShop } from "../src/server/nativePayments.js";
 import { json } from "../src/server/route.js";
 import { allowedCurrencies, paystackFromEnv } from "../src/server/paystack.js";
 import { storeFromEnv } from "../src/server/redis.js";
@@ -14,5 +15,5 @@ export function GET(): Response {
       android: auth.googleNative.androidClientIds.length > 0,
       iosClientId: auth.googleNative.iosClientId,
     } : null };
-  return json(200, { ok: true, leaderboard: store, analytics: store, shop: store && paystackFromEnv() !== null, currencies: allowedCurrencies(), signin }, "public, s-maxage=60");
+  return json(200, { ok: true, leaderboard: store, analytics: store, shop: store && paystackFromEnv() !== null, nativeShop: store ? nativeShop() : null, currencies: allowedCurrencies(), signin }, "public, s-maxage=60");
 }
